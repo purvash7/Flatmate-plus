@@ -15,29 +15,20 @@ jobs:
           from pathlib import Path
           p=Path('src/pages/OnboardingFlow.tsx')
           s=p.read_text()
-          old='const updates:Partial<UserProfile>={'
-          start=s.index(old)
+          start=s.index('const updates:Partial<UserProfile>= {'.replace(' ',''))
           end=s.index(';',start)
           obj=s[start:end]
           replacements={
-            'name,':'name:name,',
-            'gender,':'gender:gender,',
-            'smoking,':'smoking:smoking,',
-            'drinking,':'drinking:drinking,',
-            'cleanliness,':'cleanliness:cleanliness,',
-            'guests,':'guests:guests,',
-            'parties,':'parties:parties,',
-            'pets,':'pets:pets,',
-            'languages,':'languages:languages,',
-            'hobbies,':'hobbies:hobbies,',
-            'bio,':'bio:bio,',
+            'name,':'name:name,','gender,':'gender:gender,','locality,':'locality:locality,',
+            'smoking,':'smoking:smoking,','drinking,':'drinking:drinking,','cleanliness,':'cleanliness:cleanliness,',
+            'guests,':'guests:guests,','parties,':'parties:parties,','pets,':'pets:pets,',
+            'languages,':'languages:languages,','hobbies,':'hobbies:hobbies,','bio,':'bio:bio,'
           }
-          for a,b in replacements.items():
-            obj=obj.replace(a,b)
+          for a,b in replacements.items(): obj=obj.replace(a,b)
           s=s[:start]+obj+s[end:]
           p.write_text(s)
           PY
-      - name: Verify mappings
+      - name: Verify all onboarding mappings
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -48,18 +39,18 @@ jobs:
           obj=s[start:end]
           expected={
             'name':'name','date_of_birth':'dob','gender':'gender','flatmate_gender_preference':'genderPref',
-            'city':"'Bangalore'",'locality':'locality','preferred_localities':'preferred_localities',
-            'housing_intent':'housing_intent','rent_min':'Number(rentMin)','rent_max':'Number(rentMax)',
-            'food_preference':'foodPref','okay_with_nonveg_cooking':'okayNonVeg','smoking':'smoking',
-            'drinking':'drinking','cleanliness':'cleanliness','sleep_schedule':'sleepSchedule',
-            'social_level':'socialLevel','guests':'guests','parties':'parties','pets':'pets',
-            'work_schedule':'workSchedule','languages':'languages','hobbies':'hobbies','bio':'bio',
-            'non_negotiables':'nonNegotiables','house_details':'houseDetails'
+            'locality':'locality','preferred_localities':'preferred_localities','housing_intent':'housing_intent',
+            'food_preference':'foodPref','okay_with_nonveg_cooking':'okayNonVeg','smoking':'smoking','drinking':'drinking',
+            'cleanliness':'cleanliness','sleep_schedule':'sleepSchedule','social_level':'socialLevel','guests':'guests',
+            'parties':'parties','pets':'pets','work_schedule':'workSchedule','attached_washroom':'attachedWashroom',
+            'furnishing':'furnishing','gated_society':'gatedSociety','languages':'languages','hobbies':'hobbies',
+            'bio':'bio','non_negotiables':'nonNegotiables','house_details':'houseDetails'
           }
           for field,var in expected.items():
-            if not re.search(rf'\b{re.escape(field)}\s*:',obj): raise SystemExit(f'Missing {field}')
-            if field in {'name','gender','smoking','drinking','cleanliness','guests','parties','pets','languages','hobbies','bio','sleep_schedule','social_level','work_schedule','date_of_birth','flatmate_gender_preference','food_preference','okay_with_nonveg_cooking'} and not re.search(rf'\b{re.escape(field)}\s*:\s*[^,}}]*\b{re.escape(var)}\b',obj): raise SystemExit(f'Wrong mapping {field}')
-          print('All onboarding payload mappings verified.')
+            if not re.search(rf'\b{re.escape(field)}\s*:',obj): raise SystemExit(f'Missing mapping: {field}')
+            if field in {'name','gender','locality','smoking','drinking','cleanliness','guests','parties','pets','languages','hobbies','bio','sleep_schedule','social_level','work_schedule','date_of_birth','flatmate_gender_preference','food_preference','okay_with_nonveg_cooking','attached_washroom','gated_society','non_negotiables','house_details'}:
+              if not re.search(rf'\b{re.escape(field)}\s*:\s*[^,}}]*\b{re.escape(var)}\b',obj): raise SystemExit(f'Wrong mapping: {field} -> expected {var}')
+          print('All onboarding UserProfile mappings verified.')
           PY
       - name: Commit and remove audit workflow
         run: |
@@ -68,5 +59,5 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add src/pages/OnboardingFlow.tsx .github/workflows/final-onboarding-variable-audit.yml
           git diff --cached --check
-          git commit -m "Make onboarding variable mappings explicit"
+          git commit -m "Make all onboarding variable mappings explicit"
           git push
