@@ -1,4 +1,4 @@
-import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
+import { GoogleGenAI, MediaResolution, ThinkingLevel, Type } from '@google/genai';
 
 export type LivenessChallenge = 'thumbs_up' | 'thumbs_down' | 'peace' | 'open_hand';
 export interface LivenessVerificationResult { passed:boolean; is_live:boolean; has_peace_sign:boolean; is_face_clear:boolean; has_gesture:boolean; challenge:LivenessChallenge; confidence:number; message:string; }
@@ -48,24 +48,21 @@ const LIVENESS_SCHEMA={type:Type.OBJECT,properties:{
 
 async function inspectLiveness(ai:GoogleGenAI,base64:string,mimeType:string,challenge:LivenessChallenge,model:string){
   const gesture=LABELS[challenge];
-  const prompt=`FlatMate+ camera verification. Inspect this single camera frame carefully.
-The user was explicitly instructed to show ONE HAND doing exactly: ${gesture}.
-Return only the requested JSON schema.
+  const prompt=`FlatMate+ liveness check. Inspect this single camera selfie.
+The user must show ONE HAND doing exactly: ${gesture}.
+Return JSON only.
+PASS when one real human face is clearly visible and the requested hand gesture is clearly visible and belongs to that person.
+Do not reject normal lighting, glasses, makeup, shadows, hairstyle, camera angle, mirror use, moderate JPEG compression, or an imperfect crop.
+Reject only an obvious non-human/AI avatar, cartoon, mannequin, screenshot/photo-of-photo, missing face, or missing/incorrect gesture.
+Do not require proof of motion or depth from one still frame.`;
 
-PASS criteria:
-- exactly one clearly visible human face (it may be imperfectly framed, wearing glasses, wearing makeup, or under normal indoor lighting);
-- the requested hand gesture is clearly visible and belongs to the same visible person;
-- the image looks like an ordinary real camera selfie. Do not demand mathematical proof of motion or depth from one still frame.
-
-Do NOT reject genuine selfies because of moderate JPEG compression, shadows, skin tone, hairstyle, facial expression, camera angle, mirror use, or a slightly imperfect crop.
-Set is_live=false only for an obvious non-human/AI avatar, cartoon, mannequin, screenshot, or photo-of-a-photo. Set has_gesture=true only when the requested gesture is actually visible. confidence is 0-100.`;
   const response=await Promise.race([
     ai.models.generateContent({
       model,
-      contents:{parts:[{inlineData:{mimeType,data:base64}},{text:prompt}]},
-      config:{responseMimeType:'application/json',responseSchema:LIVENESS_SCHEMA,temperature:0,maxOutputTokens:256,thinkingConfig:{thinkingLevel:ThinkingLevel.LOW}}
+      contents:{parts:[{inlineData:{mimeType,data:base64},mediaResolution:{level:MediaResolution.MEDIA_RESOLUTION_LOW}},{text:prompt}]},
+      config:{responseMimeType:'application/json',responseSchema:LIVENESS_SCHEMA,temperature:0,maxOutputTokens:128,thinkingConfig:{thinkingLevel:ThinkingLevel.LOW}}
     }),
-    new Promise<never>((_,reject)=>setTimeout(()=>reject(new Error('Gemini liveness timeout')),12000))
+    new Promise<never>((_,reject)=>setTimeout(()=>reject(new Error('Gemini liveness timeout')),8000))
   ]);
   const parsed=parseJson((response as any).text||'');
   if(typeof parsed.has_gesture!=='boolean'||typeof parsed.is_face_clear!=='boolean'||typeof parsed.is_live!=='boolean')throw new Error('Gemini returned an incomplete liveness result');
@@ -73,26 +70,17 @@ Set is_live=false only for an obvious non-human/AI avatar, cartoon, mannequin, s
 }
 
 async function generateVerification(ai:GoogleGenAI,base64:string,mimeType:string,challenge:LivenessChallenge){
-  // Retry the same current model once before moving to the compatibility fallback.
-  const models=['gemini-3.8-flash','gemini-3.7-flash','gemini-3.6-flash'];
+  // Avoid the previous 6-call retry chain. One fast current-model request plus one
+  // compatibility fallback is enough; the client can simply retake on a real failure.
+  const models=['gemini-3.8-flash','gemini-3.7-flash'];
   let lastError:any;
-  const results:any[]=[];
   for(const model of models){
-    for(let attempt=0;attempt<2;attempt++){
-      try{
-        const parsed=await inspectLiveness(ai,base64,mimeType,challenge,model);
-        results.push(parsed);
-        // A positive result is sufficient; the client is already camera-only and the requested gesture is the anti-replay challenge.
-        if(parsed.has_gesture&&parsed.is_face_clear)return parsed;
-      }catch(err){
-        lastError=err;
-        console.warn(`Gemini liveness ${model} attempt ${attempt+1} failed:`,err instanceof Error?err.message:err);
-      }
+    try{
+      return await inspectLiveness(ai,base64,mimeType,challenge,model);
+    }catch(err){
+      lastError=err;
+      console.warn(`Gemini liveness ${model} failed:`,err instanceof Error?err.message:err);
     }
-  }
-  if(results.length>0){
-    // Prefer the most permissive valid vision result for genuine camera captures.
-    return results.sort((a,b)=>Number(Boolean(b.has_gesture&&b.is_face_clear))-Number(Boolean(a.has_gesture&&a.is_face_clear)))[0];
   }
   throw lastError||new Error('No Gemini liveness model available');
 }
@@ -124,8 +112,19 @@ export async function verifyFaceMatchAgainstLive(livePhotoBase64:string,profileP
   const ai=getAiClient();
   if(ai&&live.base64){
     try{
-      const response=await ai.models.generateContent({model:'gemini-3.8-flash',contents:{parts:[{inlineData:{mimeType:live.mimeType,data:live.base64}},{inlineData:{mimeType:profile.mimeType||mimeType,data:profile.base64}},{text:'You are an identity verification and anti-fraud system for FlatMate+. Image 1 is the user live selfie. Image 2 is the profile photo. Compare facial structure and estimate resemblance 0-100. Inspect Image 2 for obvious AI/synthetic generation. Pass only when resemblance >=65 and the profile photo is not AI-generated. Normal lighting, expression, hairstyle, glasses, makeup, camera angle and moderate compression should not cause a false rejection. Return JSON only.'}]},config:{responseMimeType:'application/json',responseSchema:{type:Type.OBJECT,properties:{similarity_percentage:{type:Type.NUMBER},is_same_person:{type:Type.BOOLEAN},is_ai_generated:{type:Type.BOOLEAN},passed:{type:Type.BOOLEAN},confidence:{type:Type.NUMBER},feedback:{type:Type.STRING}},required:['similarity_percentage','is_same_person','is_ai_generated','passed','confidence','feedback']},temperature:0,maxOutputTokens:256,thinkingConfig:{thinkingLevel:ThinkingLevel.LOW}}});
-      const p=parseJson(response.text||'');
+      const response=await Promise.race([
+        ai.models.generateContent({
+          model:'gemini-3.8-flash',
+          contents:{parts:[
+            {inlineData:{mimeType:live.mimeType,data:live.base64},mediaResolution:{level:MediaResolution.MEDIA_RESOLUTION_MEDIUM}},
+            {inlineData:{mimeType:profile.mimeType||mimeType,data:profile.base64},mediaResolution:{level:MediaResolution.MEDIA_RESOLUTION_MEDIUM}},
+            {text:'FlatMate+ identity verification. Image 1 is the verified live selfie. Image 2 is the proposed profile photo. Compare facial structure and estimate resemblance from 0-100. Also flag only obvious AI/synthetic generation in Image 2. Return JSON only. Pass when resemblance >=65 and Image 2 is not obviously synthetic. Do not penalize normal lighting, expression, hairstyle, glasses, makeup, camera angle, or moderate compression.'}
+          ]},
+          config:{responseMimeType:'application/json',responseSchema:{type:Type.OBJECT,properties:{similarity_percentage:{type:Type.NUMBER},is_same_person:{type:Type.BOOLEAN},is_ai_generated:{type:Type.BOOLEAN},passed:{type:Type.BOOLEAN},confidence:{type:Type.NUMBER},feedback:{type:Type.STRING}},required:['similarity_percentage','is_same_person','is_ai_generated','passed','confidence','feedback']},temperature:0,maxOutputTokens:128,thinkingConfig:{thinkingLevel:ThinkingLevel.LOW}}
+        }),
+        new Promise<never>((_,reject)=>setTimeout(()=>reject(new Error('Gemini face match timeout')),10000))
+      ]);
+      const p=parseJson((response as any).text||'');
       const sim=Math.min(100,Math.max(0,Math.round(Number(p.similarity_percentage)||0)));
       const isAi=Boolean(p.is_ai_generated);
       return{passed:sim>=65&&!isAi,similarity_percentage:sim,is_same_person:Boolean(p.is_same_person),is_ai_generated:isAi,confidence:Math.min(100,Math.max(0,Number(p.confidence)||90)),feedback:p.feedback||(isAi?'AI-generated or synthetic photos are not permitted. Please upload a genuine photo.':sim>=65?'Photo verified successfully.':'Photo does not clearly match your live photo. Please upload a clearer photo.')};
