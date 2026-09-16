@@ -14,6 +14,19 @@ import {
 import { useAuth } from '../context/AuthContext.js';
 import { api } from '../services/api.js';
 
+function decodeGoogleIdToken(idToken: string): { email?: string; name?: string; picture?: string; sub?: string } | null {
+  try {
+    const parts = idToken.split('.');
+    if (parts.length !== 3) return null;
+    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, '=');
+    const bytes = Uint8Array.from(atob(padded), char => char.charCodeAt(0));
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    return null;
+  }
+}
+
 interface AuthModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -51,16 +64,32 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   // Listen for Google OAuth popup callbacks
   useEffect(() => {
     const handleOAuthMessage = async (event: MessageEvent) => {
-      // Validate message structure
+      // Accept callbacks only from the same origin as the app.
+      if (event.origin !== window.location.origin) return;
       if (event.data?.type === 'GOOGLE_AUTH_CALLBACK') {
         setLoading(true);
         try {
-          const { idToken, accessToken } = event.data;
-          // Exchange or register
+          const { idToken } = event.data;
+          const googleProfile = idToken ? decodeGoogleIdToken(idToken) : null;
+          const resolvedEmail = googleProfile?.email || googleEmail || '';
+          const resolvedName = googleProfile?.name || googleFullName || resolvedEmail.split('@')[0] || 'Google User';
+          const resolvedGoogleId = googleProfile?.sub || undefined;
+          const resolvedPhoto = googleProfile?.picture || undefined;
+
+          if (!resolvedEmail) {
+            throw new Error('Google did not return an email address. Please try again.');
+          }
+
+          // Populate the onboarding name from the Google account profile.
+          setName(resolvedName);
+          setGoogleEmail(resolvedEmail);
+          setGoogleFullName(resolvedName);
+
           await googleLogin(
-            googleEmail || 'user@gmail.com',
-            googleFullName || 'Google User',
-            idToken ? `gid_${idToken.slice(0, 10)}` : undefined
+            resolvedEmail,
+            resolvedName,
+            resolvedGoogleId,
+            resolvedPhoto
           );
           onSuccess?.();
           onClose();
