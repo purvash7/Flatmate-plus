@@ -1,4 +1,4 @@
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 
 export type LivenessChallenge = 'thumbs_up' | 'thumbs_down' | 'peace' | 'open_hand';
 export interface LivenessVerificationResult { passed:boolean; is_live:boolean; has_peace_sign:boolean; is_face_clear:boolean; has_gesture:boolean; challenge:LivenessChallenge; confidence:number; message:string; }
@@ -63,7 +63,7 @@ Set is_live=false only for an obvious non-human/AI avatar, cartoon, mannequin, s
     ai.models.generateContent({
       model,
       contents:{parts:[{inlineData:{mimeType,data:base64}},{text:prompt}]},
-      config:{responseMimeType:'application/json',responseSchema:LIVENESS_SCHEMA,temperature:0,maxOutputTokens:256,thinkingConfig:{thinkingLevel:'low'}}
+      config:{responseMimeType:'application/json',responseSchema:LIVENESS_SCHEMA,temperature:0,maxOutputTokens:256,thinkingConfig:{thinkingLevel:ThinkingLevel.LOW}}
     }),
     new Promise<never>((_,reject)=>setTimeout(()=>reject(new Error('Gemini liveness timeout')),12000))
   ]);
@@ -124,7 +124,7 @@ export async function verifyFaceMatchAgainstLive(livePhotoBase64:string,profileP
   const ai=getAiClient();
   if(ai&&live.base64){
     try{
-      const response=await ai.models.generateContent({model:'gemini-3.8-flash',contents:{parts:[{inlineData:{mimeType:live.mimeType,data:live.base64}},{inlineData:{mimeType:profile.mimeType||mimeType,data:profile.base64}},{text:'You are an identity verification and anti-fraud system for FlatMate+. Image 1 is the user live selfie. Image 2 is the profile photo. Compare facial structure and estimate resemblance 0-100. Inspect Image 2 for obvious AI/synthetic generation. Pass only when resemblance >=65 and the profile photo is not AI-generated. Normal lighting, expression, hairstyle, glasses, makeup, camera angle and moderate compression should not cause a false rejection. Return JSON only.'}]},config:{responseMimeType:'application/json',responseSchema:{type:Type.OBJECT,properties:{similarity_percentage:{type:Type.NUMBER},is_same_person:{type:Type.BOOLEAN},is_ai_generated:{type:Type.BOOLEAN},passed:{type:Type.BOOLEAN},confidence:{type:Type.NUMBER},feedback:{type:Type.STRING}},required:['similarity_percentage','is_same_person','is_ai_generated','passed','confidence','feedback']},temperature:0,maxOutputTokens:256,thinkingConfig:{thinkingLevel:'low'}}});
+      const response=await ai.models.generateContent({model:'gemini-3.8-flash',contents:{parts:[{inlineData:{mimeType:live.mimeType,data:live.base64}},{inlineData:{mimeType:profile.mimeType||mimeType,data:profile.base64}},{text:'You are an identity verification and anti-fraud system for FlatMate+. Image 1 is the user live selfie. Image 2 is the profile photo. Compare facial structure and estimate resemblance 0-100. Inspect Image 2 for obvious AI/synthetic generation. Pass only when resemblance >=65 and the profile photo is not AI-generated. Normal lighting, expression, hairstyle, glasses, makeup, camera angle and moderate compression should not cause a false rejection. Return JSON only.'}]},config:{responseMimeType:'application/json',responseSchema:{type:Type.OBJECT,properties:{similarity_percentage:{type:Type.NUMBER},is_same_person:{type:Type.BOOLEAN},is_ai_generated:{type:Type.BOOLEAN},passed:{type:Type.BOOLEAN},confidence:{type:Type.NUMBER},feedback:{type:Type.STRING}},required:['similarity_percentage','is_same_person','is_ai_generated','passed','confidence','feedback']},temperature:0,maxOutputTokens:256,thinkingConfig:{thinkingLevel:ThinkingLevel.LOW}}});
       const p=parseJson(response.text||'');
       const sim=Math.min(100,Math.max(0,Math.round(Number(p.similarity_percentage)||0)));
       const isAi=Boolean(p.is_ai_generated);
