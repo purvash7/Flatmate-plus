@@ -15,7 +15,7 @@ jobs:
           from pathlib import Path
           p=Path('src/pages/OnboardingFlow.tsx')
           s=p.read_text()
-          start=s.index('const updates:Partial<UserProfile>= {'.replace(' ',''))
+          start=s.index('const updates:Partial<UserProfile>=')
           end=s.index(';',start)
           obj=s[start:end]
           replacements={
@@ -34,22 +34,22 @@ jobs:
           from pathlib import Path
           import re
           s=Path('src/pages/OnboardingFlow.tsx').read_text()
-          start=s.index('const updates:Partial<UserProfile>={')
+          start=s.index('const updates:Partial<UserProfile>=')
           end=s.index(';',start)
           obj=s[start:end]
-          expected={
-            'name':'name','date_of_birth':'dob','gender':'gender','flatmate_gender_preference':'genderPref',
-            'locality':'locality','preferred_localities':'preferred_localities','housing_intent':'housing_intent',
+          required=['name','date_of_birth','gender','flatmate_gender_preference','locality','preferred_localities','housing_intent','rent_min','rent_max','food_preference','okay_with_nonveg_cooking','smoking','drinking','cleanliness','sleep_schedule','social_level','guests','parties','pets','work_schedule','attached_washroom','furnishing','gated_society','languages','hobbies','bio','prompts','non_negotiables','house_details','is_profile_complete','onboarding_step']
+          for field in required:
+            if not re.search(rf'\b{re.escape(field)}\s*:',obj): raise SystemExit(f'Missing mapping: {field}')
+          checks={
+            'name':'name','date_of_birth':'dob','gender':'gender','flatmate_gender_preference':'genderPref','locality':'locality',
             'food_preference':'foodPref','okay_with_nonveg_cooking':'okayNonVeg','smoking':'smoking','drinking':'drinking',
             'cleanliness':'cleanliness','sleep_schedule':'sleepSchedule','social_level':'socialLevel','guests':'guests',
             'parties':'parties','pets':'pets','work_schedule':'workSchedule','attached_washroom':'attachedWashroom',
-            'furnishing':'furnishing','gated_society':'gatedSociety','languages':'languages','hobbies':'hobbies',
-            'bio':'bio','non_negotiables':'nonNegotiables','house_details':'houseDetails'
+            'furnishing':'furnishing','gated_society':'gatedSociety','languages':'languages','hobbies':'hobbies','bio':'bio',
+            'non_negotiables':'nonNegotiables','house_details':'houseDetails'
           }
-          for field,var in expected.items():
-            if not re.search(rf'\b{re.escape(field)}\s*:',obj): raise SystemExit(f'Missing mapping: {field}')
-            if field in {'name','gender','locality','smoking','drinking','cleanliness','guests','parties','pets','languages','hobbies','bio','sleep_schedule','social_level','work_schedule','date_of_birth','flatmate_gender_preference','food_preference','okay_with_nonveg_cooking','attached_washroom','gated_society','non_negotiables','house_details'}:
-              if not re.search(rf'\b{re.escape(field)}\s*:\s*[^,}}]*\b{re.escape(var)}\b',obj): raise SystemExit(f'Wrong mapping: {field} -> expected {var}')
+          for field,var in checks.items():
+            if not re.search(rf'\b{re.escape(field)}\s*:\s*[^,}}]*\b{re.escape(var)}\b',obj): raise SystemExit(f'Wrong mapping: {field} -> {var}')
           print('All onboarding UserProfile mappings verified.')
           PY
       - name: Commit and remove audit workflow
