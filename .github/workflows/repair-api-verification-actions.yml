@@ -1,0 +1,29 @@
+name: Repair verification API actions
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore existing action payloads
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/services/api.ts')
+          s=p.read_text()
+          s=s.replace("async reactivateDiscover():Promise<{success:boolean;profile:UserProfile}>{return request('/api/profile/reactivate-discover');}", "async reactivateDiscover():Promise<{success:boolean;profile:UserProfile}>{return request('/api/profile/reactivate-discover',{method:'POST'});}")
+          s=s.replace("async unblockUser(target_user_id:string):Promise<{success:boolean;message:string}>{return request('/api/users/unblock',{method:'POST'});}", "async unblockUser(target_user_id:string):Promise<{success:boolean;message:string}>{return request('/api/users/unblock',{method:'POST',body:JSON.stringify({target_user_id})});}")
+          p.write_text(s)
+          PY
+      - name: Commit repaired file and remove workflow
+        run: |
+          rm -f .github/workflows/repair-api-verification-actions.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/services/api.ts .github/workflows/repair-api-verification-actions.yml
+          git commit -m "Repair existing profile action payloads" || exit 0
+          git push
