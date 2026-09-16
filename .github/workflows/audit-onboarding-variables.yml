@@ -15,15 +15,11 @@ jobs:
           from pathlib import Path
           p = Path('src/pages/OnboardingFlow.tsx')
           s = p.read_text()
-          replacements = {
-              'sleep_schedule:sleepSchedule,social_level,guests,parties,pets,work_schedule,':
-              'sleep_schedule:sleepSchedule,social_level:socialLevel,guests,parties,pets,work_schedule:workSchedule,'
-          }
-          for old, new in replacements.items():
-              if old not in s:
-                  raise SystemExit(f'Expected mapping pattern not found: {old}')
-              s = s.replace(old, new, 1)
-          p.write_text(s)
+          old = 'sleep_schedule:sleepSchedule,social_level,guests,parties,pets,work_schedule,'
+          new = 'sleep_schedule:sleepSchedule,social_level:socialLevel,guests,parties,pets,work_schedule:workSchedule,'
+          if old not in s:
+              raise SystemExit(f'Expected mapping pattern not found: {old}')
+          p.write_text(s.replace(old, new, 1))
           PY
       - name: Static mapping audit
         run: |
@@ -31,8 +27,6 @@ jobs:
           from pathlib import Path
           import re
           s = Path('src/pages/OnboardingFlow.tsx').read_text()
-          # Every local state variable used for a snake_case UserProfile field
-          # must be explicitly mapped; this prevents runtime ReferenceErrors.
           required = {
             'date_of_birth': 'dob',
             'flatmate_gender_preference': 'genderPref',
@@ -56,12 +50,12 @@ jobs:
                   raise SystemExit(f'Wrong mapping for {field}; expected {variable}')
           for bad in ['social_level,', 'work_schedule,', 'sleep_schedule,']:
               if bad in obj:
-                  raise SystemExit(f'Bare shorthand remains in final profile payload: {bad}')
+                  raise SystemExit(f'Bare shorthand remains: {bad}')
           print('Onboarding profile variable audit passed.')
           PY
       - name: Type-check project
         run: |
-          npm ci
+          npm install --no-package-lock
           npm run lint
       - name: Remove audit workflow and commit
         run: |
