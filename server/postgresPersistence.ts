@@ -101,7 +101,33 @@ export async function hydrateFromPostgres() {
   }
 
   for (const row of s.rows) swipes.set(row.id, { id: row.id, user_id: row.swiper_id, target_user_id: row.target_id, action: row.action, created_at: iso(row.created_at) });
-  for (const row of m.rows) matches.set(row.id, { id: row.id, user_ids: row.user_ids || [], match_score: row.match_score, match_breakdown: row.match_breakdown || {}, status: row.status, moving_in_requested_by: row.moving_in_requested_by || [], created_at: iso(row.created_at), updated_at: iso(row.updated_at) });
+
+  for (const row of m.rows) {
+    const rawUserIds = Array.isArray(row.user_ids) ? row.user_ids.filter((id: unknown): id is string => typeof id === 'string') : [];
+    if (rawUserIds.length !== 2) {
+      console.warn(`Skipping invalid persisted match ${row.id}: expected exactly two user IDs.`);
+      continue;
+    }
+    const userIds = rawUserIds as [string, string];
+    const otherUser = profiles.get(userIds[1]) || profiles.get(userIds[0]);
+    if (!otherUser) {
+      console.warn(`Skipping persisted match ${row.id}: no profile found for either matched user.`);
+      continue;
+    }
+    matches.set(row.id, {
+      id: row.id,
+      user_ids: userIds,
+      other_user: otherUser,
+      match_score: Number(row.match_score) || 0,
+      match_breakdown: row.match_breakdown || { total_score: Number(row.match_score) || 0, categories: [], highlights: [], dealbreakers_met: true },
+      unread_count: 0,
+      status: row.status,
+      moving_in_requested_by: row.moving_in_requested_by || [],
+      created_at: iso(row.created_at),
+      updated_at: iso(row.updated_at)
+    });
+  }
+
   for (const row of mm.rows) messages.set(row.id, { id: row.id, match_id: row.match_id, sender_id: row.sender_id, recipient_id: row.recipient_id, content: row.content, read: !!row.read, created_at: iso(row.created_at) });
   for (const row of b.rows) blocks.set(row.id, { id: row.id, blocker_id: row.blocker_id, blocked_id: row.blocked_id, blocked_user: row.blocked_user || undefined, reason: row.reason || undefined, created_at: iso(row.created_at) } as any);
   for (const row of r.rows) reports.set(row.id, { id: row.id, reporter_id: row.reporter_id, reported_id: row.target_id, reason: row.reason, details: row.details || '', created_at: iso(row.created_at) });
