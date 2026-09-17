@@ -1,32 +1,55 @@
 import * as faceapi from '@vladmandic/face-api';
+import { FilesetResolver, GestureRecognizer } from '@mediapipe/tasks-vision';
 
-export type LocalChallenge = 'blink' | 'turn_left' | 'turn_right' | 'smile';
-export interface LocalLivenessResult { passed:boolean; confidence:number; message:string; faceCount:number; framesAnalyzed:number; }
-export interface LocalFaceMatchResult { passed:boolean; similarity_percentage:number; confidence:number; feedback:string; }
+export type LocalChallenge='thumbs_up'|'thumbs_down'|'peace'|'open_hand'|'pointing_up'|'ilove_you';
+export interface LocalLivenessResult{passed:boolean;confidence:number;message:string;faceCount:number;framesAnalyzed:number;gesture?:LocalChallenge;}
+export interface LocalFaceMatchResult{passed:boolean;similarity_percentage:number;confidence:number;feedback:string;}
 
-const MODEL_URL='https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model';
+const FACE_MODEL_URL='https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model';
+const VISION_WASM_URL='https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304/wasm';
+const GESTURE_MODEL_URL='https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task';
 let modelsPromise:Promise<void>|null=null;
-function distance(a:{x:number;y:number},b:{x:number;y:number}){return Math.hypot(a.x-b.x,a.y-b.y);}
-function ratio(a:{x:number;y:number},b:{x:number;y:number},c:{x:number;y:number},d:{x:number;y:number}){return(distance(a,b)+distance(c,d))/Math.max(.001,2*distance(a,d));}
-async function ensureModels(){if(!modelsPromise){modelsPromise=Promise.all([faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)]).then(()=>undefined).catch(error=>{modelsPromise=null;throw error;});}return modelsPromise;}
+let gestureRecognizer:GestureRecognizer|null=null;
+
+const GESTURES:Record<LocalChallenge,{label:string;emoji:string;apiName:string}>= {
+  thumbs_up:{label:'thumbs up',emoji:'👍',apiName:'Thumb_Up'},
+  thumbs_down:{label:'thumbs down',emoji:'👎',apiName:'Thumb_Down'},
+  peace:{label:'peace sign',emoji:'✌️',apiName:'Victory'},
+  open_hand:{label:'open hand',emoji:'🖐️',apiName:'Open_Palm'},
+  pointing_up:{label:'one finger pointing up',emoji:'☝️',apiName:'Pointing_Up'},
+  ilove_you:{label:'I-love-you sign',emoji:'🤟',apiName:'ILoveYou'},
+};
+
+async function ensureModels(){
+  if(!modelsPromise){modelsPromise=Promise.all([
+    faceapi.nets.tinyFaceDetector.loadFromUri(FACE_MODEL_URL),
+    faceapi.nets.faceLandmark68Net.loadFromUri(FACE_MODEL_URL),
+    faceapi.nets.faceRecognitionNet.loadFromUri(FACE_MODEL_URL),
+  ]).then(async()=>{
+    const vision=await FilesetResolver.forVisionTasks(VISION_WASM_URL);
+    gestureRecognizer=await GestureRecognizer.createFromOptions(vision,{baseOptions:{modelAssetPath:GESTURE_MODEL_URL},runningMode:'VIDEO',numHands:1,minHandDetectionConfidence:.55,minHandPresenceConfidence:.55,minTrackingConfidence:.55});
+  }).catch(error=>{modelsPromise=null;gestureRecognizer=null;throw error;});}
+  return modelsPromise;
+}
 export async function preloadLocalVerificationModels(){await ensureModels();}
+export function getGestureChallenge(challenge:LocalChallenge){return GESTURES[challenge];}
 
 export async function runLocalLiveness(video:HTMLVideoElement,challenge:LocalChallenge,onProgress?:(message:string)=>void):Promise<LocalLivenessResult>{
-  await ensureModels();const options=new faceapi.TinyFaceDetectorOptions({inputSize:320,scoreThreshold:.55});const started=performance.now();
-  const samples:Array<{yaw:number;blink:number;smile:number}>=[];let totalFrames=0;
-  while(performance.now()-started<7000&&samples.length<24){
-    if(video.readyState>=2){totalFrames++;const result=await faceapi.detectSingleFace(video,options).withFaceLandmarks();if(result){const p=result.landmarks.positions,leftEye=p.slice(36,42),rightEye=p.slice(42,48),mouth=p.slice(48,68);const lc=leftEye.reduce((s,v)=>({x:s.x+v.x,y:s.y+v.y}),{x:0,y:0}),rc=rightEye.reduce((s,v)=>({x:s.x+v.x,y:s.y+v.y}),{x:0,y:0});lc.x/=leftEye.length;lc.y/=leftEye.length;rc.x/=rightEye.length;rc.y/=rightEye.length;const nose=p[30],eyeMidX=(lc.x+rc.x)/2,eyeWidth=Math.max(1,distance(lc,rc)),yaw=(nose.x-eyeMidX)/eyeWidth,blink=(ratio(leftEye[1],leftEye[5],leftEye[2],leftEye[4])+ratio(rightEye[1],rightEye[5],rightEye[2],rightEye[4]))/2,mouthWidth=Math.max(1,distance(mouth[0],mouth[6])),mouthOpen=distance(mouth[3],mouth[9])/mouthWidth;samples.push({yaw,blink,smile:mouthOpen});onProgress?.(`Face detected · ${samples.length}/24 checks`);}}
-    await new Promise(resolve=>setTimeout(resolve,120));
+  await ensureModels();if(!gestureRecognizer)throw new Error('Local gesture recognizer is unavailable.');
+  const faceOptions=new faceapi.TinyFaceDetectorOptions({inputSize:320,scoreThreshold:.55});
+  const target=GESTURES[challenge].apiName;const started=performance.now();let validFrames=0,matchingFrames=0,totalFrames=0,lastTimestamp=0,bestScore=0;
+  while(performance.now()-started<6000&&validFrames<18){
+    if(video.readyState>=2&&video.videoWidth&&video.videoHeight){
+      totalFrames++;const timestamp=Math.max(Date.now(),lastTimestamp+1);lastTimestamp=timestamp;
+      const [face,gesture]=await Promise.all([faceapi.detectSingleFace(video,faceOptions),Promise.resolve(gestureRecognizer.recognizeForVideo(video,timestamp))]);
+      const top=gesture.gestures?.[0]?.[0];const score=top?.score||0;
+      if(face){validFrames++;if(top?.categoryName===target&&score>=.62){matchingFrames++;bestScore=Math.max(bestScore,score);}onProgress?.(top?.categoryName===target&&score>=.62?`Gesture recognized · ${Math.round(score*100)}%`:`Show ${GESTURES[challenge].label} while keeping your face visible`);}else onProgress?.('Keep your face clearly visible in the camera');
+    }
+    await new Promise(resolve=>setTimeout(resolve,90));
   }
-  if(samples.length<8)return{passed:false,confidence:0,message:'Keep your face centered and clearly visible, then try again.',faceCount:samples.length?1:0,framesAnalyzed:totalFrames};
-  const first=samples.slice(0,5),last=samples.slice(-10);let challengeScore=0;
-  if(challenge==='blink'){const baseline=first.reduce((s,x)=>s+x.blink,0)/first.length;let blinks=0,closed=false;for(const sample of samples){const isClosed=sample.blink<Math.max(.18,baseline*.58);if(isClosed&&!closed){blinks++;closed=true;}if(!isClosed)closed=false;}challengeScore=blinks>=2?1:0;}
-  else if(challenge==='turn_left'){const base=first.reduce((s,x)=>s+x.yaw,0)/first.length;challengeScore=Math.min(...last.map(x=>x.yaw))<base-.13?1:0;}
-  else if(challenge==='turn_right'){const base=first.reduce((s,x)=>s+x.yaw,0)/first.length;challengeScore=Math.max(...last.map(x=>x.yaw))>base+.13?1:0;}
-  else{const neutral=first.reduce((s,x)=>s+x.smile,0)/first.length;challengeScore=Math.max(...last.map(x=>x.smile))>Math.max(.38,neutral*1.35)?1:0;}
-  const stability=samples.filter(x=>Number.isFinite(x.yaw)&&Number.isFinite(x.blink)).length/samples.length,coverage=Math.min(1,samples.length/16),confidence=Math.round((challengeScore*.65+stability*.2+coverage*.15)*100);
-  if(!challengeScore){const message=challenge==='blink'?'Blink twice naturally while keeping your face visible.':challenge==='turn_left'?'Turn your head to the left when prompted.':challenge==='turn_right'?'Turn your head to the right when prompted.':'Smile naturally when prompted.';return{passed:false,confidence,message,faceCount:1,framesAnalyzed:totalFrames};}
-  return{passed:true,confidence:Math.max(85,confidence),message:'Live face challenge verified on this device.',faceCount:1,framesAnalyzed:totalFrames};
+  const coverage=Math.min(1,validFrames/10),consistency=validFrames?matchingFrames/validFrames:0,confidence=Math.round((consistency*.7+coverage*.2+Math.min(1,bestScore)*.1)*100),passed=validFrames>=8&&matchingFrames>=4&&consistency>=.45;
+  if(!passed)return{passed:false,confidence,message:`Please show ${GESTURES[challenge].label} clearly with one hand while keeping your face visible, then try again.`,faceCount:validFrames?1:0,framesAnalyzed:totalFrames,gesture:challenge};
+  return{passed:true,confidence:Math.max(85,confidence),message:`Live ${GESTURES[challenge].label} verified on this device.`,faceCount:1,framesAnalyzed:totalFrames,gesture:challenge};
 }
 
 export async function matchLocalFaces(livePhoto:string,profilePhoto:string):Promise<LocalFaceMatchResult>{
