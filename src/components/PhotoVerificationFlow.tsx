@@ -1,130 +1,42 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Camera, CheckCircle2, AlertCircle, RefreshCw, ShieldCheck, UserCheck } from 'lucide-react';
-import { api } from '../services/api.js';
-import { useAuth } from '../context/AuthContext.js';
-import { LocalChallenge, matchLocalFaces, preloadLocalVerificationModels, runLocalLiveness } from '../services/localVerification.js';
+import React,{useState,useRef,useEffect,useCallback} from 'react';
+import {Camera,CheckCircle2,AlertCircle,RefreshCw,ShieldCheck,UserCheck} from 'lucide-react';
+import {api} from '../services/api.js';
+import {useAuth} from '../context/AuthContext.js';
+import {LocalChallenge,getGestureChallenge,matchLocalFaces,preloadLocalVerificationModels,runLocalLiveness} from '../services/localVerification.js';
 
-interface Props { onPhotoUploaded:(photoUrl:string)=>void; existingUrl?:string; isMain?:boolean; }
-type Challenge = { id:LocalChallenge; label:string; emoji:string };
-const CHALLENGES:Challenge[]=[
-  {id:'blink',label:'blink twice',emoji:'👀'},
-  {id:'turn_left',label:'turn your head left',emoji:'⬅️'},
-  {id:'turn_right',label:'turn your head right',emoji:'➡️'},
-  {id:'smile',label:'smile naturally',emoji:'😊'}
-];
+interface Props{onPhotoUploaded:(photoUrl:string)=>void;existingUrl?:string;isMain?:boolean;}
+type Challenge={id:LocalChallenge;label:string;emoji:string};
+const CHALLENGES:Challenge[]=(['thumbs_up','thumbs_down','peace','open_hand','pointing_up','ilove_you'] as LocalChallenge[]).map(id=>({id,...getGestureChallenge(id)}));
 const randomChallenge=()=>CHALLENGES[Math.floor(Math.random()*CHALLENGES.length)];
 
 export const PhotoVerificationFlow:React.FC<Props>=({onPhotoUploaded,existingUrl,isMain=true})=>{
-  const {profile,updateProfileState}=useAuth();
-  const [challenge,setChallenge]=useState<Challenge>(()=>randomChallenge());
-  const [step,setStep]=useState<'liveness'|'profile_photo'|'complete'>(existingUrl&&profile?.liveness_verified?'complete':'liveness');
-  const [livePhoto,setLivePhoto]=useState<string|null>(profile?.live_verification_photo||null);
-  const [livenessSuccess,setLivenessSuccess]=useState(!!profile?.liveness_verified);
-  const [isLiveChecking,setIsLiveChecking]=useState(false);
-  const [livenessError,setLivenessError]=useState<string|null>(null);
-  const [profilePhoto,setProfilePhoto]=useState<string|null>(existingUrl||null);
-  const [isMatching,setIsMatching]=useState(false);
-  const [matchError,setMatchError]=useState<string|null>(null);
-  const [verificationFeedback,setVerificationFeedback]=useState<string|null>(null);
-  const [similarityScore,setSimilarityScore]=useState<number|null>(profile?.photo_similarity_score||null);
-  const [cameraActive,setCameraActive]=useState(false);
-  const [cameraLoading,setCameraLoading]=useState(false);
-  const [modelsReady,setModelsReady]=useState(false);
-  const videoRef=useRef<HTMLVideoElement|null>(null);
-  const streamRef=useRef<MediaStream|null>(null);
-
-  useEffect(()=>{
-    preloadLocalVerificationModels().then(()=>setModelsReady(true)).catch(()=>setLivenessError('Local verification could not be loaded. Please refresh the page and try again.'));
-    return()=>{streamRef.current?.getTracks().forEach(t=>t.stop());};
-  },[]);
-
-  const setVideoRef=useCallback((node:HTMLVideoElement|null)=>{
-    videoRef.current=node;
-    if(node&&streamRef.current){node.srcObject=streamRef.current;node.play().catch(()=>{});}
-  },[]);
-
-  const startCamera=async()=>{
-    setLivenessError(null);setCameraLoading(true);
-    streamRef.current?.getTracks().forEach(t=>t.stop());
-    try{
-      if(!window.isSecureContext)throw new Error('Camera access requires HTTPS.');
-      if(!navigator.mediaDevices?.getUserMedia)throw new Error('Camera access is not supported by this browser.');
-      const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'user'},width:{ideal:720,min:480},height:{ideal:720,min:480},aspectRatio:{ideal:1}},audio:false});
-      streamRef.current=stream;setCameraActive(true);
-      if(videoRef.current){videoRef.current.srcObject=stream;await videoRef.current.play().catch(()=>{});}
-    }catch(error:any){
-      setCameraActive(false);
-      const message=error?.name==='NotAllowedError'?'Camera permission was denied. Please allow camera access in your browser settings and try again.':error?.name==='NotFoundError'?'No camera was found on this device.':error?.message||'Could not access the camera. Please try again.';
-      setLivenessError(message);
-    }finally{setCameraLoading(false);}
-  };
-
-  const stopCamera=()=>{streamRef.current?.getTracks().forEach(t=>t.stop());streamRef.current=null;setCameraActive(false);};
-
-  const capture=async()=>{
-    const video=videoRef.current;
-    if(!video||video.readyState<2||!video.videoWidth||!video.videoHeight){setLivenessError('Camera is still starting. Please wait a moment and try again.');return;}
-    setIsLiveChecking(true);setLivenessError(null);setVerificationFeedback(null);
-    try{
-      const result=await runLocalLiveness(video,challenge.id,msg=>setVerificationFeedback(msg));
-      if(!result.passed){setLivenessSuccess(false);setLivenessError(result.message);return;}
-      const canvas=document.createElement('canvas');
-      const maxDimension=960;const scale=Math.min(1,maxDimension/Math.max(video.videoWidth,video.videoHeight));
-      canvas.width=Math.max(1,Math.round(video.videoWidth*scale));canvas.height=Math.max(1,Math.round(video.videoHeight*scale));
-      const ctx=canvas.getContext('2d');if(!ctx)throw new Error('Could not capture the verified camera frame.');
-      ctx.drawImage(video,0,0,canvas.width,canvas.height);
-      const base64=canvas.toDataURL('image/jpeg',.84);
-      setLivePhoto(base64);setLivenessSuccess(true);setVerificationFeedback('Live face challenge verified on this device.');
-      stopCamera();
-      if(profile){
-        const updated={...profile,liveness_verified:true,live_verification_photo:base64,verification_status:'pending' as const};
-        updateProfileState(updated);
-        try{await api.updateProfile({liveness_verified:true,live_verification_photo:base64,verification_status:'pending'});}catch{ /* local verification remains usable if persistence is temporarily unavailable */ }
-      }
-      setTimeout(()=>setStep('profile_photo'),350);
-    }catch(e:any){setLivenessSuccess(false);setLivenessError(e.message||'Local liveness verification failed. Please try again.');}
-    finally{setIsLiveChecking(false);}
-  };
-
-  const handleProfilePhoto=async(e:React.ChangeEvent<HTMLInputElement>)=>{
-    const f=e.target.files?.[0];if(!f)return;
-    if(f.size>12*1024*1024){setMatchError('Photo exceeds 12MB before compression. Please choose a smaller photo.');return;}
-    const r=new FileReader();
-    r.onload=async()=>{const b=r.result as string;setProfilePhoto(b);await processFaceMatch(b);};
-    r.readAsDataURL(f);e.target.value='';
-  };
-
-  const processFaceMatch=async(base64:string)=>{
-    setIsMatching(true);setMatchError(null);setVerificationFeedback(null);
-    try{
-      if(!livePhoto)throw new Error('Your live verification photo is missing. Please complete liveness again.');
-      const m=await matchLocalFaces(livePhoto,base64);
-      setSimilarityScore(m.similarity_percentage);setVerificationFeedback(m.feedback);
-      if(m.passed){
-        const u=await api.uploadPhoto({photo_base64:base64,mime_type:'image/jpeg',is_main:isMain});
-        updateProfileState({...u.profile,photo_similarity_score:m.similarity_percentage,verification_status:'verified'});
-        try{await api.updateProfile({photo_similarity_score:m.similarity_percentage,verification_status:'verified',is_verified:true});}catch{/* photo upload already succeeded */}
-        onPhotoUploaded(u.photo.url);setStep('complete');
-      }else setMatchError(m.feedback);
-    }catch(e:any){setMatchError(e.message||'Local face verification failed. Please try another photo.');}
-    finally{setIsMatching(false);}
-  };
-
-  const retake=()=>{stopCamera();setChallenge(randomChallenge());setLivePhoto(null);setLivenessSuccess(false);setLivenessError(null);setVerificationFeedback(null);setStep('liveness');};
-
-  return <div className="space-y-4 max-w-md mx-auto w-full" id="photo-verification-container">
-    <input id="profile-photo-file" type="file" accept="image/jpeg,image/jpg,image/png,image/webp" onChange={handleProfilePhoto} className="hidden" />
-    <div className="flex items-center justify-between px-2 text-xs font-bold text-[#7A7D87]"><div className="flex items-center gap-1.5"><span className="w-5 h-5 rounded-full bg-[#4F8A6D] text-white flex items-center justify-center">{livenessSuccess?'✓':'1'}</span><span>Live Check</span></div><div className="w-8 border-t border-[#E6E3DE]"/><div className="flex items-center gap-1.5"><span className="w-5 h-5 rounded-full bg-[#7A7D87] text-white flex items-center justify-center">{step==='complete'?'✓':'2'}</span><span>Profile Photo</span></div></div>
-
-    {step==='liveness'&&<div className="bg-white rounded-3xl border border-[#E6E3DE] p-5 sm:p-6 shadow-sm space-y-4">
-      <div className="text-center space-y-1"><div className="w-12 h-12 rounded-2xl bg-[#E07A5F]/15 flex items-center justify-center mx-auto text-2xl">{challenge.emoji}</div><h3 className="font-display font-bold text-lg">Quick Liveness Check</h3><p className="text-xs text-[#7A7D87] max-w-xs mx-auto">This check runs on your device. <strong>{challenge.label}</strong> while keeping your whole face visible.</p></div>
-      {cameraActive?<div className="relative rounded-2xl overflow-hidden bg-black aspect-square max-w-xs mx-auto border-2 border-[#E07A5F]"><video ref={setVideoRef} className="w-full h-full object-cover -scale-x-100" autoPlay playsInline muted/><div className="absolute top-3 left-3 right-3 bg-black/60 text-white rounded-full px-3 py-2 text-center text-xs font-bold">Do this: {challenge.label} {challenge.emoji}</div><div className="absolute bottom-4 left-0 right-0 flex justify-center gap-3"><button type="button" onClick={stopCamera} className="px-4 py-2 bg-white rounded-xl text-xs font-bold">Cancel</button><button type="button" onClick={capture} disabled={isLiveChecking||!modelsReady} className="w-14 h-14 rounded-full bg-[#E07A5F] border-4 border-white shadow-xl text-xl disabled:opacity-50">{isLiveChecking?'…':challenge.emoji}</button></div></div>:livePhoto?<div className="relative rounded-2xl overflow-hidden aspect-square max-w-xs mx-auto bg-black"><img src={livePhoto} alt="Verified liveness capture" className="w-full h-full object-cover"/><div className="absolute inset-0 bg-white/95 flex flex-col items-center justify-center text-center"><CheckCircle2 className="w-12 h-12 text-[#4F8A6D] mb-2"/><p className="font-extrabold">Liveness Verified</p><p className="text-xs text-[#4F8A6D] mt-1">Moving to profile photo...</p></div></div>:<div className="p-5 border-2 border-dashed border-[#E6E3DE] rounded-2xl text-center bg-[#FAF8F4] space-y-4"><div className="text-4xl">{challenge.emoji}👤</div><h4 className="font-display font-bold text-sm">{modelsReady?'Ready for your live challenge':'Preparing local verification...'}</h4><p className="text-xs text-[#7A7D87]">No gallery upload is accepted for this step. The camera challenge is checked locally on this device.</p><button type="button" disabled={cameraLoading||!modelsReady} onClick={startCamera} className="w-full py-3 rounded-xl bg-[#E07A5F] text-white font-bold text-sm disabled:opacity-50">{!modelsReady?'Loading verification model...':cameraLoading?'Opening Camera...':'Open Live Camera'}</button></div>}
-      {verificationFeedback&&!livenessError&&isLiveChecking&&<p className="text-xs text-[#7A7D87] text-center">{verificationFeedback}</p>}
-      {livenessError&&<div className="bg-[#D64545]/10 border border-[#D64545]/20 rounded-xl p-3 text-xs text-[#D64545] flex gap-2"><AlertCircle className="w-4 h-4 shrink-0"/><div><p className="font-semibold">{livenessError}</p><button type="button" onClick={retake} className="underline font-bold mt-2">Generate a new challenge</button></div></div>}
-    </div>}
-
-    {step==='profile_photo'&&<div className="bg-white rounded-3xl border border-[#E6E3DE] p-5 sm:p-6 shadow-sm space-y-4"><div className="text-center"><div className="w-12 h-12 rounded-2xl bg-[#4F8A6D]/15 text-[#4F8A6D] flex items-center justify-center mx-auto"><UserCheck className="w-6 h-6"/></div><h3 className="font-display font-bold text-lg mt-2">Upload Your Profile Photo</h3><p className="text-xs text-[#7A7D87]">Your photo is matched against the verified live face locally on this device.</p></div>{profilePhoto?<div className="relative rounded-2xl overflow-hidden aspect-[4/5] max-w-xs mx-auto"><img src={profilePhoto} alt="Profile preview" className="w-full h-full object-cover"/>{isMatching&&<div className="absolute inset-0 bg-white/90 flex flex-col items-center justify-center"><RefreshCw className="w-8 h-8 text-[#E07A5F] animate-spin"/><p className="font-bold mt-2">Matching locally...</p></div>}</div>:<button type="button" onClick={()=>document.getElementById('profile-photo-file')?.click()} className="w-full py-4 rounded-2xl border-2 border-dashed border-[#E6E3DE] bg-[#FAF8F4] text-sm font-bold"><Camera className="w-5 h-5 inline mr-2 text-[#E07A5F]"/>Choose Profile Photo</button>}{matchError&&<div className="bg-[#D64545]/10 border border-[#D64545]/20 rounded-xl p-3 text-xs text-[#D64545]"><p className="font-semibold">{matchError}</p><button type="button" onClick={()=>document.getElementById('profile-photo-file')?.click()} className="underline font-bold mt-2">Try another photo</button></div>}{verificationFeedback&&!matchError&&<p className="text-xs text-[#4F8A6D] text-center font-semibold">{verificationFeedback}</p>}</div>}
-
-    {step==='complete'&&profilePhoto&&<div className="bg-white rounded-3xl border border-[#E6E3DE] p-5 shadow-sm text-center space-y-3"><div className="relative rounded-2xl overflow-hidden aspect-[4/5] max-w-xs mx-auto"><img src={profilePhoto} alt="Verified Profile" className="w-full h-full object-cover"/><div className="absolute top-3 left-3 bg-[#4F8A6D] text-white px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1"><ShieldCheck className="w-3.5 h-3.5"/>Verified Photo</div></div><h4 className="font-display font-bold flex items-center justify-center gap-1"><CheckCircle2 className="w-5 h-5 text-[#4F8A6D]"/>Photo Verified</h4>{similarityScore!==null&&<p className="text-xs text-[#7A7D87]">Facial similarity: {similarityScore}%</p>}<div className="flex gap-2"><button type="button" onClick={()=>{setProfilePhoto(null);setStep('profile_photo');}} className="flex-1 py-2.5 rounded-xl bg-[#FAF8F4] border border-[#E6E3DE] text-xs font-bold">Change Photo</button><button type="button" onClick={retake} className="flex-1 py-2.5 rounded-xl bg-[#FAF8F4] border border-[#E6E3DE] text-xs font-bold">Retake Liveness</button></div></div>}
-  </div>;
+ const {profile,updateProfileState}=useAuth();
+ const [challenge,setChallenge]=useState<Challenge>(()=>randomChallenge());
+ const [step,setStep]=useState<'liveness'|'profile_photo'|'complete'>(existingUrl&&profile?.liveness_verified?'complete':'liveness');
+ const [livePhoto,setLivePhoto]=useState<string|null>(profile?.live_verification_photo||null);
+ const [livenessSuccess,setLivenessSuccess]=useState(!!profile?.liveness_verified);
+ const [isLiveChecking,setIsLiveChecking]=useState(false);const [livenessError,setLivenessError]=useState<string|null>(null);
+ const [profilePhoto,setProfilePhoto]=useState<string|null>(existingUrl||null);const [isMatching,setIsMatching]=useState(false);const [matchError,setMatchError]=useState<string|null>(null);
+ const [verificationFeedback,setVerificationFeedback]=useState<string|null>(null);const [similarityScore,setSimilarityScore]=useState<number|null>(profile?.photo_similarity_score||null);
+ const [cameraActive,setCameraActive]=useState(false);const [cameraLoading,setCameraLoading]=useState(false);const [modelsReady,setModelsReady]=useState(false);
+ const videoRef=useRef<HTMLVideoElement|null>(null);const streamRef=useRef<MediaStream|null>(null);
+ useEffect(()=>{preloadLocalVerificationModels().then(()=>setModelsReady(true)).catch(()=>setLivenessError('Local verification could not be loaded. Please refresh the page and try again.'));return()=>{streamRef.current?.getTracks().forEach(t=>t.stop());};},[]);
+ const setVideoRef=useCallback((node:HTMLVideoElement|null)=>{videoRef.current=node;if(node&&streamRef.current){node.srcObject=streamRef.current;node.play().catch(()=>{});}},[]);
+ const startCamera=async()=>{setLivenessError(null);setCameraLoading(true);streamRef.current?.getTracks().forEach(t=>t.stop());try{if(!window.isSecureContext)throw new Error('Camera access requires HTTPS.');if(!navigator.mediaDevices?.getUserMedia)throw new Error('Camera access is not supported by this browser.');const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'user'},width:{ideal:720,min:480},height:{ideal:720,min:480},aspectRatio:{ideal:1}},audio:false});streamRef.current=stream;setCameraActive(true);if(videoRef.current){videoRef.current.srcObject=stream;await videoRef.current.play().catch(()=>{});}}catch(error:any){setCameraActive(false);const message=error?.name==='NotAllowedError'?'Camera permission was denied. Please allow camera access in your browser settings and try again.':error?.name==='NotFoundError'?'No camera was found on this device.':error?.message||'Could not access the camera. Please try again.';setLivenessError(message);}finally{setCameraLoading(false);}};
+ const stopCamera=()=>{streamRef.current?.getTracks().forEach(t=>t.stop());streamRef.current=null;setCameraActive(false);};
+ const capture=async()=>{const video=videoRef.current;if(!video||video.readyState<2||!video.videoWidth||!video.videoHeight){setLivenessError('Camera is still starting. Please wait a moment and try again.');return;}setIsLiveChecking(true);setLivenessError(null);setVerificationFeedback(null);try{const result=await runLocalLiveness(video,challenge.id,msg=>setVerificationFeedback(msg));if(!result.passed){setLivenessSuccess(false);setLivenessError(result.message);return;}const canvas=document.createElement('canvas');const maxDimension=960;const scale=Math.min(1,maxDimension/Math.max(video.videoWidth,video.videoHeight));canvas.width=Math.max(1,Math.round(video.videoWidth*scale));canvas.height=Math.max(1,Math.round(video.videoHeight*scale));const ctx=canvas.getContext('2d');if(!ctx)throw new Error('Could not capture the verified camera frame.');ctx.drawImage(video,0,0,canvas.width,canvas.height);const base64=canvas.toDataURL('image/jpeg',.84);setLivePhoto(base64);setLivenessSuccess(true);setVerificationFeedback(result.message);stopCamera();if(profile){const updated={...profile,liveness_verified:true,live_verification_photo:base64,verification_status:'pending' as const};updateProfileState(updated);try{await api.updateProfile({liveness_verified:true,live_verification_photo:base64,verification_status:'pending'});}catch{}}setTimeout(()=>setStep('profile_photo'),350);}catch(e:any){setLivenessSuccess(false);setLivenessError(e.message||'Local liveness verification failed. Please try again.');}finally{setIsLiveChecking(false);}};
+ const handleProfilePhoto=async(e:React.ChangeEvent<HTMLInputElement>)=>{const f=e.target.files?.[0];if(!f)return;if(f.size>12*1024*1024){setMatchError('Photo exceeds 12MB before compression. Please choose a smaller photo.');return;}const r=new FileReader();r.onload=async()=>{const b=r.result as string;setProfilePhoto(b);await processFaceMatch(b);};r.readAsDataURL(f);e.target.value='';};
+ const processFaceMatch=async(base64:string)=>{setIsMatching(true);setMatchError(null);setVerificationFeedback(null);try{if(!livePhoto)throw new Error('Your live verification photo is missing. Please complete liveness again.');const m=await matchLocalFaces(livePhoto,base64);setSimilarityScore(m.similarity_percentage);setVerificationFeedback(m.feedback);if(m.passed){const u=await api.uploadPhoto({photo_base64:base64,mime_type:'image/jpeg',is_main:isMain});updateProfileState({...u.profile,photo_similarity_score:m.similarity_percentage,verification_status:'verified'});try{await api.updateProfile({photo_similarity_score:m.similarity_percentage,verification_status:'verified',is_verified:true});}catch{}onPhotoUploaded(u.photo.url);setStep('complete');}else setMatchError(m.feedback);}catch(e:any){setMatchError(e.message||'Local face verification failed. Please try another photo.');}finally{setIsMatching(false);}};
+ const retake=()=>{stopCamera();setChallenge(randomChallenge());setLivePhoto(null);setLivenessSuccess(false);setLivenessError(null);setVerificationFeedback(null);setStep('liveness');};
+ return <div className="space-y-4 max-w-md mx-auto w-full" id="photo-verification-container">
+  <input id="profile-photo-file" type="file" accept="image/jpeg,image/jpg,image/png,image/webp" onChange={handleProfilePhoto} className="hidden"/>
+  <div className="flex items-center justify-between px-2 text-xs font-bold text-[#7A7D87]"><div className="flex items-center gap-1.5"><span className="w-5 h-5 rounded-full bg-[#4F8A6D] text-white flex items-center justify-center">{livenessSuccess?'✓':'1'}</span><span>Live Check</span></div><div className="w-8 border-t border-[#E6E3DE]"/><div className="flex items-center gap-1.5"><span className="w-5 h-5 rounded-full bg-[#7A7D87] text-white flex items-center justify-center">{step==='complete'?'✓':'2'}</span><span>Profile Photo</span></div></div>
+  {step==='liveness'&&<div className="bg-white rounded-3xl border border-[#E6E3DE] p-5 sm:p-6 shadow-sm space-y-4">
+   <div className="text-center space-y-1"><div className="w-12 h-12 rounded-2xl bg-[#E07A5F]/15 flex items-center justify-center mx-auto text-2xl">{challenge.emoji}</div><h3 className="font-display font-bold text-lg">Quick Liveness Check</h3><p className="text-xs text-[#7A7D87] max-w-xs mx-auto">This check runs on your device. <strong>Show a {challenge.label}</strong> while keeping your whole face visible.</p></div>
+   {cameraActive?<div className="relative rounded-2xl overflow-hidden bg-black aspect-square max-w-xs mx-auto border-2 border-[#E07A5F]"><video ref={setVideoRef} className="w-full h-full object-cover -scale-x-100" autoPlay playsInline muted/><div className="absolute top-3 left-3 right-3 bg-black/60 text-white rounded-full px-3 py-2 text-center text-xs font-bold">Show: {challenge.label} {challenge.emoji}</div><div className="absolute bottom-4 left-0 right-0 flex justify-center gap-3"><button type="button" onClick={stopCamera} className="px-4 py-2 bg-white rounded-xl text-xs font-bold">Cancel</button><button type="button" onClick={capture} disabled={isLiveChecking||!modelsReady} className="w-14 h-14 rounded-full bg-[#E07A5F] border-4 border-white shadow-xl text-xl disabled:opacity-50">{isLiveChecking?'…':challenge.emoji}</button></div></div>:livePhoto?<div className="relative rounded-2xl overflow-hidden aspect-square max-w-xs mx-auto bg-black"><img src={livePhoto} alt="Verified liveness capture" className="w-full h-full object-cover"/><div className="absolute inset-0 bg-white/95 flex flex-col items-center justify-center text-center"><CheckCircle2 className="w-12 h-12 text-[#4F8A6D] mb-2"/><p className="font-extrabold">Liveness Verified</p><p className="text-xs text-[#4F8A6D] mt-1">Moving to profile photo...</p></div></div>:<div className="p-5 border-2 border-dashed border-[#E6E3DE] rounded-2xl text-center bg-[#FAF8F4] space-y-4"><div className="text-4xl">{challenge.emoji}👤</div><h4 className="font-display font-bold text-sm">{modelsReady?'Ready for your live challenge':'Preparing local verification...'}</h4><p className="text-xs text-[#7A7D87]">No gallery upload is accepted for this step. Show the random sign with one hand while keeping your face visible. Verification runs locally on this device.</p><button type="button" disabled={cameraLoading||!modelsReady} onClick={startCamera} className="w-full py-3 rounded-xl bg-[#E07A5F] text-white font-bold text-sm disabled:opacity-50">{!modelsReady?'Loading verification model...':cameraLoading?'Opening Camera...':'Open Live Camera'}</button></div>}
+   {verificationFeedback&&!livenessError&&isLiveChecking&&<p className="text-xs text-[#7A7D87] text-center">{verificationFeedback}</p>}{livenessError&&<div className="bg-[#D64545]/10 border border-[#D64545]/20 rounded-xl p-3 text-xs text-[#D64545] flex gap-2"><AlertCircle className="w-4 h-4 shrink-0"/><div><p className="font-semibold">{livenessError}</p><button type="button" onClick={retake} className="underline font-bold mt-2">Generate a new sign</button></div></div>}
+  </div>}
+  {step==='profile_photo'&&<div className="bg-white rounded-3xl border border-[#E6E3DE] p-5 sm:p-6 shadow-sm space-y-4"><div className="text-center"><div className="w-12 h-12 rounded-2xl bg-[#4F8A6D]/15 text-[#4F8A6D] flex items-center justify-center mx-auto"><UserCheck className="w-6 h-6"/></div><h3 className="font-display font-bold text-lg mt-2">Upload Your Profile Photo</h3><p className="text-xs text-[#7A7D87]">Your photo is matched against the verified live face locally on this device.</p></div>{profilePhoto?<div className="relative rounded-2xl overflow-hidden aspect-[4/5] max-w-xs mx-auto"><img src={profilePhoto} alt="Profile preview" className="w-full h-full object-cover"/>{isMatching&&<div className="absolute inset-0 bg-white/90 flex flex-col items-center justify-center"><RefreshCw className="w-8 h-8 text-[#E07A5F] animate-spin"/><p className="font-bold mt-2">Matching locally...</p></div>}</div>:<button type="button" onClick={()=>document.getElementById('profile-photo-file')?.click()} className="w-full py-4 rounded-2xl border-2 border-dashed border-[#E6E3DE] bg-[#FAF8F4] text-sm font-bold"><Camera className="w-5 h-5 inline mr-2 text-[#E07A5F]"/>Choose Profile Photo</button>}{matchError&&<div className="bg-[#D64545]/10 border border-[#D64545]/20 rounded-xl p-3 text-xs text-[#D64545]"><p className="font-semibold">{matchError}</p><button type="button" onClick={()=>document.getElementById('profile-photo-file')?.click()} className="underline font-bold mt-2">Try another photo</button></div>}{verificationFeedback&&!matchError&&<p className="text-xs text-[#4F8A6D] text-center font-semibold">{verificationFeedback}</p>}</div>}
+  {step==='complete'&&profilePhoto&&<div className="bg-white rounded-3xl border border-[#E6E3DE] p-5 shadow-sm text-center space-y-3"><div className="relative rounded-2xl overflow-hidden aspect-[4/5] max-w-xs mx-auto"><img src={profilePhoto} alt="Verified Profile" className="w-full h-full object-cover"/><div className="absolute top-3 left-3 bg-[#4F8A6D] text-white px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1"><ShieldCheck className="w-3.5 h-3.5"/>Verified Photo</div></div><h4 className="font-display font-bold flex items-center justify-center gap-1"><CheckCircle2 className="w-5 h-5 text-[#4F8A6D]"/>Photo Verified</h4>{similarityScore!==null&&<p className="text-xs text-[#7A7D87]">Facial similarity: {similarityScore}%</p>}<div className="flex gap-2"><button type="button" onClick={()=>{setProfilePhoto(null);setStep('profile_photo');}} className="flex-1 py-2.5 rounded-xl bg-[#FAF8F4] border border-[#E6E3DE] text-xs font-bold">Change Photo</button><button type="button" onClick={retake} className="flex-1 py-2.5 rounded-xl bg-[#FAF8F4] border border-[#E6E3DE] text-xs font-bold">Retake Liveness</button></div></div>}
+ </div>;
 };
