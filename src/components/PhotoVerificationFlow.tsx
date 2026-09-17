@@ -64,8 +64,7 @@ export const PhotoVerificationFlow:React.FC<Props>=({onPhotoUploaded,existingUrl
   const capture=async()=>{
     const video=videoRef.current;
     if(!video||video.readyState<2||!video.videoWidth||!video.videoHeight){setLivenessError('Camera is still starting. Please wait a moment and try again.');return;}
-    stopCamera();
-    setIsLiveChecking(true);setLivenessError(null);
+    setIsLiveChecking(true);setLivenessError(null);setVerificationFeedback(null);
     try{
       const result=await runLocalLiveness(video,challenge.id,msg=>setVerificationFeedback(msg));
       if(!result.passed){setLivenessSuccess(false);setLivenessError(result.message);return;}
@@ -76,6 +75,7 @@ export const PhotoVerificationFlow:React.FC<Props>=({onPhotoUploaded,existingUrl
       ctx.drawImage(video,0,0,canvas.width,canvas.height);
       const base64=canvas.toDataURL('image/jpeg',.84);
       setLivePhoto(base64);setLivenessSuccess(true);setVerificationFeedback('Live face challenge verified on this device.');
+      stopCamera();
       if(profile){
         const updated={...profile,liveness_verified:true,live_verification_photo:base64,verification_status:'pending' as const};
         updateProfileState(updated);
@@ -88,7 +88,7 @@ export const PhotoVerificationFlow:React.FC<Props>=({onPhotoUploaded,existingUrl
 
   const handleProfilePhoto=async(e:React.ChangeEvent<HTMLInputElement>)=>{
     const f=e.target.files?.[0];if(!f)return;
-    if(f.size>12*1024*1024){setMatchError('Photo exceeds 12MB before compression. Please choose a smaller image.');return;}
+    if(f.size>12*1024*1024){setMatchError('Photo exceeds 12MB before compression. Please choose a smaller photo.');return;}
     const r=new FileReader();
     r.onload=async()=>{const b=r.result as string;setProfilePhoto(b);await processFaceMatch(b);};
     r.readAsDataURL(f);e.target.value='';
@@ -110,7 +110,7 @@ export const PhotoVerificationFlow:React.FC<Props>=({onPhotoUploaded,existingUrl
     finally{setIsMatching(false);}
   };
 
-  const retake=()=>{setChallenge(randomChallenge());setLivePhoto(null);setLivenessSuccess(false);setLivenessError(null);setVerificationFeedback(null);setStep('liveness');};
+  const retake=()=>{stopCamera();setChallenge(randomChallenge());setLivePhoto(null);setLivenessSuccess(false);setLivenessError(null);setVerificationFeedback(null);setStep('liveness');};
 
   return <div className="space-y-4 max-w-md mx-auto w-full" id="photo-verification-container">
     <input id="profile-photo-file" type="file" accept="image/jpeg,image/jpg,image/png,image/webp" onChange={handleProfilePhoto} className="hidden" />
