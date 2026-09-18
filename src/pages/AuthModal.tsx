@@ -14,7 +14,7 @@ import {
 import { useAuth } from '../context/AuthContext.js';
 import { api } from '../services/api.js';
 
-function decodeGoogleIdToken(idToken: string): { email?: string; name?: string; picture?: string; sub?: string } | null {
+function decodeGoogleIdToken(idToken: string): { email?: string; name?: string; sub?: string } | null {
   try {
     const parts = idToken.split('.');
     if (parts.length !== 3) return null;
@@ -74,8 +74,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           const resolvedEmail = googleProfile?.email || googleEmail || '';
           const resolvedName = googleProfile?.name || googleFullName || resolvedEmail.split('@')[0] || 'Google User';
           const resolvedGoogleId = googleProfile?.sub || undefined;
-          const resolvedPhoto = googleProfile?.picture || undefined;
-
           if (!resolvedEmail) {
             throw new Error('Google did not return an email address. Please try again.');
           }
@@ -88,8 +86,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           await googleLogin(
             resolvedEmail,
             resolvedName,
-            resolvedGoogleId,
-            resolvedPhoto
+            resolvedGoogleId
           );
           onSuccess?.();
           onClose();
