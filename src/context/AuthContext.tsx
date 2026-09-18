@@ -20,7 +20,7 @@ interface AuthContextType {
   unreadTotal: number;
   login: (email: string, pass: string) => Promise<void>;
   signup: (email: string, pass: string, name?: string) => Promise<void>;
-  googleLogin: (email: string, name?: string, googleId?: string, photo?: string) => Promise<void>;
+  googleLogin: (email: string, name?: string, googleId?: string) => Promise<void>;
   logout: () => void;
   refreshUser: () => Promise<void>;
   updateProfileState: (updated: UserProfile) => void;
@@ -151,8 +151,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     wsService.connect();
   };
 
-  const googleLogin = async (email: string, name?: string, googleId?: string, photo?: string) => {
-    const res = await api.googleAuth({ email, name, google_id: googleId, photo_url: photo });
+  const googleLogin = async (email: string, name?: string, googleId?: string) => {
+    const res = await api.googleAuth({ email, name, google_id: googleId });
     setUser(res.user);
     setProfile(res.user.profile || null);
     wsService.connect();
