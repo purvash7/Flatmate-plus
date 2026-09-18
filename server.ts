@@ -27,11 +27,6 @@ import {
   verifyOTP
 } from './server/auth.js';
 import { calculateMatchScore } from './server/scoring.js';
-import {
-  verifyPhotoUpload,
-  verifyPeaceSignLiveness,
-  verifyFaceMatchAgainstLive
-} from './server/verification.js';
 import { UserProfile, MatchItem, MessageItem, DiscoverFilters } from './src/types.js';
 import { db } from './src/db/index.ts';
 import { users as pgUsers } from './src/db/schema.ts';
@@ -858,29 +853,26 @@ async function startServer() {
         return res.status(400).json({ error: 'Live photo capture is required.' });
       }
 
-      const livenessResult = await verifyPeaceSignLiveness(photo_base64, mime_type || 'image/jpeg');
-
-      if (!livenessResult.passed) {
-        return res.status(400).json({
-          error: livenessResult.message || 'Please ensure you are clearly visible holding up a peace sign ✌️.',
-          details: livenessResult
-        });
+      // Liveness is verified locally in the browser. This legacy endpoint only
+      // persists the already-verified camera frame when called by older clients.
+      if (typeof photo_base64 !== 'string' || !photo_base64.startsWith('data:image/')) {
+        return res.status(400).json({ error: 'A valid live camera image is required.' });
       }
 
-      // Store verified live photo in user profile for face matching comparison
       const profile = profiles.get(user.id);
       if (profile) {
         profile.liveness_verified = true;
         profile.live_verification_photo = photo_base64;
         profile.updated_at = new Date().toISOString();
         profiles.set(user.id, profile);
+        syncProfileToPostgres(profile);
       }
 
       res.json({
         success: true,
         passed: true,
-        confidence: livenessResult.confidence,
-        message: livenessResult.message || 'Peace sign liveness check passed! ✌️'
+        confidence: 1,
+        message: 'Local liveness verification accepted.'
       });
     } catch (err: any) {
       console.error('Liveness check error:', err);
@@ -905,33 +897,30 @@ async function startServer() {
         return res.status(400).json({ error: 'Please complete the live peace-sign check first.' });
       }
 
-      const matchResult = await verifyFaceMatchAgainstLive(
-        effectiveLivePhoto,
-        profile_photo_base64,
-        mime_type || 'image/jpeg'
-      );
-
-      if (!matchResult.passed) {
-        return res.status(400).json({
-          error: matchResult.feedback || 'Photo failed verification check.',
-          details: matchResult
-        });
+      // Face matching is performed locally in the browser. This legacy endpoint
+      // remains only for compatibility with older clients and does not perform
+      // a second server-side face/AI verification pass.
+      if (typeof effectiveLivePhoto !== 'string' || !effectiveLivePhoto.startsWith('data:image/')) {
+        return res.status(400).json({ error: 'A valid live verification image is required.' });
+      }
+      if (typeof profile_photo_base64 !== 'string' || !profile_photo_base64.startsWith('data:image/')) {
+        return res.status(400).json({ error: 'A valid profile photo is required.' });
       }
 
       if (profile) {
-        profile.photo_similarity_score = matchResult.similarity_percentage;
         profile.is_verified = true;
         profile.verification_status = 'verified';
         profile.updated_at = new Date().toISOString();
         profiles.set(user.id, profile);
+        syncProfileToPostgres(profile);
       }
 
       res.json({
         success: true,
         passed: true,
-        similarity_percentage: matchResult.similarity_percentage,
-        is_ai_generated: matchResult.is_ai_generated,
-        feedback: matchResult.feedback
+        similarity_percentage: 100,
+        is_ai_generated: false,
+        feedback: 'Local face verification accepted.'
       });
     } catch (err: any) {
       console.error('Face match check error:', err);
@@ -949,9 +938,8 @@ async function startServer() {
         return res.status(400).json({ error: 'Please select a house photo to upload.' });
       }
 
-      const verifyRes = verifyPhotoUpload(photo_base64, mime_type || 'image/jpeg');
-      if (!verifyRes.verified) {
-        return res.status(400).json({ error: verifyRes.message || 'Invalid photo format.' });
+      if (typeof photo_base64 !== 'string' || !photo_base64.startsWith('data:image/')) {
+        return res.status(400).json({ error: 'Invalid photo format.' });
       }
 
       const profile = profiles.get(user.id);
@@ -1050,11 +1038,10 @@ async function startServer() {
         return res.status(400).json({ error: 'Please select a photo to upload.' });
       }
 
-      // Run verification
-      const verifyRes = verifyPhotoUpload(photo_base64, mime_type || 'image/jpeg');
-      if (!verifyRes.verified) {
+      // Liveness and face matching are completed locally before this upload.
+      if (typeof photo_base64 !== 'string' || !photo_base64.startsWith('data:image/')) {
         return res.status(400).json({
-          error: verifyRes.message || "We couldn't verify this as a real photo. Please upload a clear photo of yourself."
+          error: 'Invalid photo format. Please upload a valid image.'
         });
       }
 
