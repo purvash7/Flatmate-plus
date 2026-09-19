@@ -1147,146 +1147,226 @@ async function startServer() {
         non_negotiables
       } = req.query as any;
 
-      const results: any[] = [];
-
-      // Parse non-negotiables if provided
       const parsedNonNegs: string[] = non_negotiables
         ? (typeof non_negotiables === 'string'
             ? non_negotiables.split(',').map((s: string) => s.trim()).filter(Boolean)
             : Array.isArray(non_negotiables) ? non_negotiables : [])
         : [];
 
-      for (const [targetId, targetProf] of profiles.entries()) {
-        // Exclude self
-        if (targetId === currentUserId) continue;
+      const requestedLocality = typeof locality === 'string' && locality && locality !== 'All'
+        ? locality.trim().toLowerCase()
+        : '';
 
-        // Exclude blocked
-        if (blockedIds.has(targetId)) continue;
+      // Bangalore locality groups used only to establish a deterministic "next nearest"
+      // fallback when an exact locality is exhausted. Profiles may still qualify through
+      // their own preferred_localities, which takes precedence over this map.
+      const localityGroups: string[][] = [
+        ['indiranagar', 'domlur', 'ulsoor', 'halasuru', 'jeevanbheemanagar', 'cv raman nagar', 'kaggadaspura'],
+        ['koramangala', 'ejipura', 'hsr layout', 'bommanahalli', 'btm layout'],
+        ['hbr layout', 'kalyan nagar', 'kammanahalli', 'hrbr layout', 'banaswadi', 'ramamurthy nagar'],
+        ['whitefield', 'brookefield', 'hoodi', 'kundalahalli', 'marathahalli', 'itpl'],
+        ['bellandur', 'kadubeesanahalli', 'devarabisanahalli', 'panathur', 'varthur'],
+        ['jp nagar', 'jayanagar', 'banashankari', 'arekere', 'kumaraswamy layout'],
+        ['electronic city', 'bommasandra', 'singasandra', 'hsr layout'],
+        ['malleshwaram', 'rajajinagar', 'basaveshwaranagar', 'vijayanagar', 'yeshwanthpur'],
+        ['sadashivanagar', 'rt nagar', 'hebbal', 'sanjay nagar'],
+        ['btm layout', 'hsr layout', 'koramangala', 'jayanagar'],
+        ['nagawara', 'thanisandra', 'yelahanka', 'hebbal'],
+        ['central bangalore', 'mg road', 'brigade road', 'richmond town', 'langford town']
+      ];
 
-        // Exclude already swiped
-        if (swipedIds.has(targetId)) continue;
+      const normalizeLocality = (value: string) => value.trim().toLowerCase();
+      const sameLocality = (a: string, b: string) => normalizeLocality(a) === normalizeLocality(b);
+      const sharesPreferredLocality = (p: UserProfile, requested: string) =>
+        (p.preferred_localities || []).some(v => normalizeLocality(v) === requested);
 
-        // Exclude if target is not active in discovery or marked moved in
-        if (!targetProf.discover_active || targetProf.moved_in_status === 'moved_in') continue;
+      const getLocalityTier = (p: UserProfile): { tier: number; label: string; distance: number } => {
+        if (!requestedLocality) return { tier: 1, label: 'Your selected areas', distance: 0 };
+        const targetLocality = normalizeLocality(p.locality || '');
 
-        // Locality filter
-        if (locality && locality !== 'All' && targetProf.locality.toLowerCase() !== locality.toLowerCase()) {
-          if (!targetProf.preferred_localities?.some(p => p.toLowerCase() === locality.toLowerCase())) {
-            continue;
+        if (targetLocality === requestedLocality) {
+          return { tier: 1, label: `In ${locality || 'your selected area'}`, distance: 0 };
+        }
+
+        // If the person explicitly lists the requested area as a preferred locality,
+        // treat that as the closest-area match even when their primary locality differs.
+        if (sharesPreferredLocality(p, requestedLocality)) {
+          return { tier: 1, label: `Prefers ${locality || 'your selected area'}`, distance: 0.5 };
+        }
+
+        const groupIndexes = localityGroups
+          .map((group, index) => group.includes(requestedLocality) ? index : -1)
+          .filter(index => index >= 0);
+
+        if (groupIndexes.length > 0) {
+          for (const groupIndex of groupIndexes) {
+            const group = localityGroups[groupIndex];
+            if (group.includes(targetLocality)) {
+              return { tier: 2, label: `Nearby area • ${p.locality}`, distance: 1 };
+            }
           }
         }
 
-        // Rent filter
-        if (min_rent && targetProf.rent_max < Number(min_rent)) continue;
-        if (max_rent && targetProf.rent_min > Number(max_rent)) continue;
+        return { tier: 4, label: `Other nearby area • ${p.locality}`, distance: 2 };
+      };
 
-        // Gender filter:
-        // 1. If explicit query parameter is set:
+      const violatesDealbreakers = (targetProf: UserProfile): boolean => {
+        for (const nn of parsedNonNegs) {
+          const nnLower = nn.toLowerCase();
+          if ((nnLower.includes('no smoking') || nnLower.includes('non-smoking')) && targetProf.smoking === 'Yes') return true;
+          if (nnLower.includes('no drinking') && targetProf.drinking === 'Yes') return true;
+          if ((nnLower.includes('pure veg') || nnLower.includes('vegetarian')) &&
+              targetProf.food_preference !== 'Vegetarian' && targetProf.food_preference !== 'Vegan') return true;
+          if (nnLower.includes('pet friendly') && targetProf.pets === 'No pets') return true;
+          if (nnLower.includes('attached private washroom') && targetProf.housing_intent?.has_house && !targetProf.house_details?.attached_washroom_in_vacant_room) return true;
+          if (nnLower.includes('quiet hours') && targetProf.sleep_schedule === 'Night owl') return true;
+        }
+        return false;
+      };
+
+      const matchesHardConstraints = (targetProf: UserProfile): boolean => {
+        if (targetProf.discover_active === false || targetProf.moved_in_status === 'moved_in') return false;
+        if (violatesDealbreakers(targetProf)) return false;
+
+        // Gender preference is a hard compatibility constraint rather than a soft ranking signal.
         if (gender_preference && gender_preference !== 'Any') {
-          if (gender_preference === 'Men only' && targetProf.gender !== 'Man') continue;
-          if (gender_preference === 'Women only' && targetProf.gender !== 'Woman') continue;
+          if (gender_preference === 'Men only' && targetProf.gender !== 'Man') return false;
+          if (gender_preference === 'Women only' && targetProf.gender !== 'Woman') return false;
         }
-
-        // 2. Reciprocal gender check: if target only wants women or men
         if (userProfile?.gender) {
-          if (targetProf.flatmate_gender_preference === 'Women only' && userProfile.gender !== 'Woman') continue;
-          if (targetProf.flatmate_gender_preference === 'Men only' && userProfile.gender !== 'Man') continue;
+          if (targetProf.flatmate_gender_preference === 'Women only' && userProfile.gender !== 'Woman') return false;
+          if (targetProf.flatmate_gender_preference === 'Men only' && userProfile.gender !== 'Man') return false;
         }
 
-        // Food filter
-        if (food_preference && food_preference !== 'Any' && targetProf.food_preference !== food_preference) {
-          continue;
-        }
-
-        // Smoking filter
-        if (smoking && smoking !== 'Any' && targetProf.smoking !== smoking) {
-          continue;
-        }
-
-        // Drinking filter
-        if (drinking && drinking !== 'Any' && targetProf.drinking !== drinking) {
-          continue;
-        }
-
-        // Cleanliness filter
-        if (cleanliness && cleanliness !== 'Any' && targetProf.cleanliness !== cleanliness) {
-          continue;
-        }
-
-        // Sleep filter
-        if (sleep_schedule && sleep_schedule !== 'Any' && targetProf.sleep_schedule !== sleep_schedule) {
-          continue;
-        }
-
-        // Housing Intent filter
+        // Housing intent is also kept hard because showing someone who cannot satisfy
+        // the selected housing goal is not useful as a fallback.
         if (housing_intent && housing_intent !== 'All') {
-          if (housing_intent === 'has_house' && !targetProf.housing_intent?.has_house) continue;
-          if (housing_intent === 'co_search' && !targetProf.housing_intent?.looking_to_co_search) continue;
-          if (housing_intent === 'vacancy' && !targetProf.housing_intent?.looking_for_vacancy) continue;
+          if (housing_intent === 'has_house' && !targetProf.housing_intent?.has_house) return false;
+          if (housing_intent === 'co_search' && !targetProf.housing_intent?.looking_to_co_search) return false;
+          if (housing_intent === 'vacancy' && !targetProf.housing_intent?.looking_for_vacancy) return false;
+        }
+        return true;
+      };
+
+      const matchesFilterSet = (targetProf: UserProfile, relaxedLevel: number): boolean => {
+        if (!matchesHardConstraints(targetProf)) return false;
+
+        // Level 0 = every selected filter must match.
+        // Level 1 = relax lifestyle preference filters, but preserve locality/budget.
+        // Level 2 = relax lifestyle + budget, but preserve locality.
+        // Higher levels are used only after the requested area is exhausted.
+        if (relaxedLevel < 1) {
+          if (food_preference && food_preference !== 'Any' && targetProf.food_preference !== food_preference) return false;
+          if (smoking && smoking !== 'Any' && targetProf.smoking !== smoking) return false;
+          if (drinking && drinking !== 'Any' && targetProf.drinking !== drinking) return false;
+          if (cleanliness && cleanliness !== 'Any' && targetProf.cleanliness !== cleanliness) return false;
+          if (sleep_schedule && sleep_schedule !== 'Any' && targetProf.sleep_schedule !== sleep_schedule) return false;
+          if (social_level && social_level !== 'Any' && targetProf.social_level !== social_level) return false;
         }
 
-        // Non-negotiables / Dealbreakers filter
-        if (parsedNonNegs.length > 0) {
-          let violatesDealbreaker = false;
-          for (const nn of parsedNonNegs) {
-            const nnLower = nn.toLowerCase();
-            // Smoking dealbreaker
-            if ((nnLower.includes('no smoking') || nnLower.includes('non-smoking')) && targetProf.smoking === 'Yes') {
-              violatesDealbreaker = true;
-              break;
-            }
-            // Drinking dealbreaker
-            if (nnLower.includes('no drinking') && targetProf.drinking === 'Yes') {
-              violatesDealbreaker = true;
-              break;
-            }
-            // Vegetarian dealbreaker
-            if ((nnLower.includes('pure veg') || nnLower.includes('vegetarian')) &&
-                targetProf.food_preference !== 'Vegetarian' && targetProf.food_preference !== 'Vegan') {
-              violatesDealbreaker = true;
-              break;
-            }
-            // Pet friendly dealbreaker
-            if (nnLower.includes('pet friendly') && targetProf.pets === 'No pets') {
-              violatesDealbreaker = true;
-              break;
-            }
-            // Attached private washroom
-            if (nnLower.includes('attached private washroom') && targetProf.housing_intent?.has_house && !targetProf.house_details?.attached_washroom_in_vacant_room) {
-              violatesDealbreaker = true;
-              break;
-            }
-            // Quiet hours
-            if (nnLower.includes('quiet hours') && targetProf.sleep_schedule === 'Night owl') {
-              violatesDealbreaker = true;
-              break;
-            }
-          }
-          if (violatesDealbreaker) continue;
+        if (relaxedLevel < 2) {
+          if (min_rent && targetProf.rent_max < Number(min_rent)) return false;
+          if (max_rent && targetProf.rent_min > Number(max_rent)) return false;
         }
 
-        // Compute Match Score if user profile exists
-        let matchResult = null;
-        let score = 78;
-        if (userProfile) {
-          matchResult = calculateMatchScore(userProfile, targetProf);
-          score = matchResult.total_score;
+        return true;
+      };
+
+      const results: any[] = [];
+
+      for (const [targetId, targetProf] of profiles.entries()) {
+        if (targetId === currentUserId) continue;
+        if (blockedIds.has(targetId)) continue;
+        if (swipedIds.has(targetId)) continue;
+        if (!matchesHardConstraints(targetProf)) continue;
+
+        const location = getLocalityTier(targetProf);
+
+        // Build a progressive discovery queue:
+        // 1. Exact/explicit preferred area + all filters
+        // 2. Nearby area + all filters
+        // 3. Same requested area + relaxed preferences/budget
+        // 4. Nearby/other areas + relaxed preferences/budget
+        // This guarantees useful fallback profiles without silently violating
+        // non-negotiables, gender, or housing intent.
+        let tier = 4;
+        let tierLabel = location.label;
+        let relaxedLevel = 2;
+
+        if (location.tier <= 1 && matchesFilterSet(targetProf, 0)) {
+          tier = 1;
+          tierLabel = location.label;
+          relaxedLevel = 0;
+        } else if (location.tier === 2 && matchesFilterSet(targetProf, 0)) {
+          tier = 2;
+          tierLabel = location.label;
+          relaxedLevel = 0;
+        } else if (location.tier <= 1 && matchesFilterSet(targetProf, 1)) {
+          tier = 3;
+          tierLabel = `More matches in ${targetProf.locality}`;
+          relaxedLevel = 1;
+        } else if (location.tier <= 1 && matchesFilterSet(targetProf, 2)) {
+          tier = 3;
+          tierLabel = `More profiles in ${targetProf.locality}`;
+          relaxedLevel = 2;
+        } else if (location.tier === 2 && matchesFilterSet(targetProf, 1)) {
+          tier = 4;
+          tierLabel = `Nearby area • ${targetProf.locality}`;
+          relaxedLevel = 1;
+        } else if (matchesFilterSet(targetProf, 2)) {
+          tier = 5;
+          tierLabel = `Wider area • ${targetProf.locality}`;
+          relaxedLevel = 2;
+        } else {
+          continue;
         }
+
+        const matchResult = userProfile ? calculateMatchScore(userProfile, targetProf) : null;
+        const score = matchResult?.total_score ?? 78;
 
         results.push({
           ...targetProf,
           match_score: score,
-          match_breakdown: matchResult
+          match_breakdown: matchResult,
+          discovery_tier: tier,
+          discovery_tier_label: tierLabel,
+          relaxed_filter_level: relaxedLevel,
+          discovery_area: targetProf.locality,
+          area_distance_level: location.distance
         });
       }
 
-      // Sort by match score descending
-      results.sort((a, b) => (b.match_score || 0) - (a.match_score || 0));
+      // Never mix fallback tiers randomly. Exact matches always come first,
+      // followed by the nearest area, then relaxed matches in the requested area,
+      // then progressively wider fallbacks. Within each tier, compatibility score
+      // remains the primary sort key.
+      results.sort((a, b) => {
+        if ((a.discovery_tier || 99) !== (b.discovery_tier || 99)) {
+          return (a.discovery_tier || 99) - (b.discovery_tier || 99);
+        }
+        const scoreDiff = (b.match_score || 0) - (a.match_score || 0);
+        if (scoreDiff !== 0) return scoreDiff;
+        return String(a.name || '').localeCompare(String(b.name || ''));
+      });
+
+      const tierCounts = results.reduce((acc: Record<string, number>, p: any) => {
+        const key = String(p.discovery_tier || 5);
+        acc[key] = (acc[key] || 0) + 1;
+        return acc;
+      }, {});
 
       res.json({
         profiles: results,
         total: results.length,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        discovery: {
+          tier_counts: tierCounts,
+          requested_locality: locality || null,
+          has_exact_matches: (tierCounts['1'] || 0) > 0,
+          has_nearby_matches: (tierCounts['2'] || 0) > 0,
+          has_relaxed_locality_matches: (tierCounts['3'] || 0) > 0,
+          has_wider_matches: (tierCounts['4'] || 0) > 0 || (tierCounts['5'] || 0) > 0
+        }
       });
     } catch {
       res.status(500).json({ error: "Couldn't load profiles. Check your connection." });
