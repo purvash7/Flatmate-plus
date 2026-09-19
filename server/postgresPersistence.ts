@@ -152,7 +152,7 @@ export async function persistSnapshot() {
       INSERT INTO users (id,email,phone,name,phone_verified,email_verified,google_id,password_hash,auth_provider,created_at,updated_at)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())
       ON CONFLICT (id) DO UPDATE SET email=$2,phone=$3,name=$4,phone_verified=$5,email_verified=$6,google_id=$7,password_hash=$8,auth_provider=$9,updated_at=NOW()
-    `, [user.id, user.email, user.phone || null, (user as any).name || null, !!user.phone_verified, !!(user as any).email_verified, (user as any).google_id || null, user.password_hash || null, (user as any).auth_provider || 'local']);
+    `, [user.id, user.email, user.phone || null, (user as any).name || null, !!user.phone_verified, !!(user as any).email_verified, (user as any).google_id || null, user.password_hash || null, (user as any).auth_provider || 'local', user.created_at || new Date().toISOString()]);
 
     for (const p of profiles.values()) if (users.has(p.user_id)) await client.query(`
       INSERT INTO profiles (id,user_id,name,age,gender,dob,locality,city,rent_min,rent_max,food_preference,cleanliness,sleep_schedule,smoking,drinking,pets_preference,guest_policy,occupation,bio,main_photo,photos,is_verified,peace_sign_verified,non_negotiables,hobbies,languages,prompts,housing_intent,house_details,profile_data,onboarding_complete,created_at,updated_at)
