@@ -34,7 +34,7 @@ async function ensureModels(){
 export async function preloadLocalVerificationModels(){await ensureModels();}
 export function getGestureChallenge(challenge:LocalChallenge){return GESTURES[challenge];}
 
-export async function runLocalLiveness(video:HTMLVideoElement,challenge:LocalChallenge,onProgress?:(message:string)=>void):Promise<LocalLivenessResult>{
+export async function runLocalLiveness(video:HTMLVideoElement,challenge:LocalChallenge,onProgress?:(message:string)=>void,onFrame?:(frame:string)=>void):Promise<LocalLivenessResult>{
   await ensureModels();if(!gestureRecognizer)throw new Error('Local gesture recognizer is unavailable.');
   const faceOptions=new faceapi.TinyFaceDetectorOptions({inputSize:320,scoreThreshold:.55});
   const target=GESTURES[challenge].apiName;const started=performance.now();let validFrames=0,matchingFrames=0,totalFrames=0,lastTimestamp=0,bestScore=0;
@@ -43,7 +43,7 @@ export async function runLocalLiveness(video:HTMLVideoElement,challenge:LocalCha
       totalFrames++;const timestamp=Math.max(Date.now(),lastTimestamp+1);lastTimestamp=timestamp;
       const [face,gesture]=await Promise.all([faceapi.detectSingleFace(video,faceOptions),Promise.resolve(gestureRecognizer.recognizeForVideo(video,timestamp))]);
       const top=gesture.gestures?.[0]?.[0];const score=top?.score||0;
-      if(face){validFrames++;if(top?.categoryName===target&&score>=.62){matchingFrames++;bestScore=Math.max(bestScore,score);}onProgress?.(top?.categoryName===target&&score>=.62?`Gesture recognized · ${Math.round(score*100)}%`:`Show ${GESTURES[challenge].label} while keeping your face visible`);}else onProgress?.('Keep your face clearly visible in the camera');
+      if(face){validFrames++;if(onFrame&&validFrames%2===0){const canvas=document.createElement('canvas');const maxDimension=640;const scale=Math.min(1,maxDimension/Math.max(video.videoWidth,video.videoHeight));canvas.width=Math.max(1,Math.round(video.videoWidth*scale));canvas.height=Math.max(1,Math.round(video.videoHeight*scale));const ctx=canvas.getContext('2d');if(ctx){ctx.drawImage(video,0,0,canvas.width,canvas.height);onFrame(canvas.toDataURL('image/jpeg',.72));}}if(top?.categoryName===target&&score>=.62){matchingFrames++;bestScore=Math.max(bestScore,score);}onProgress?.(top?.categoryName===target&&score>=.62?`Gesture recognized · ${Math.round(score*100)}%`:`Show ${GESTURES[challenge].label} while keeping your face visible`);}else onProgress?.('Keep your face clearly visible in the camera');
     }
     await new Promise(resolve=>setTimeout(resolve,90));
   }
