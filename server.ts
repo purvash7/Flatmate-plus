@@ -1359,9 +1359,9 @@ async function startServer() {
           tier_counts: tierCounts,
           requested_locality: locality || null,
           has_exact_matches: (tierCounts['1'] || 0) > 0,
-          has_nearby_matches: (tierCounts['2'] || 0) > 0,
-          has_relaxed_locality_matches: (tierCounts['3'] || 0) > 0,
-          has_wider_matches: (tierCounts['4'] || 0) > 0 || (tierCounts['5'] || 0) > 0
+          has_relaxed_locality_matches: (tierCounts['2'] || 0) > 0,
+          has_nearby_matches: (tierCounts['3'] || 0) > 0,
+          has_wider_matches: (tierCounts['4'] || 0) > 0
         }
       });
     } catch {
