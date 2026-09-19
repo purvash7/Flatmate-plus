@@ -23,6 +23,7 @@ import {
   verifyPassword,
   createAuthToken,
   verifyAuthToken,
+  assertAuthConfig,
   generateAndStoreOTP,
   verifyOTP
 } from './server/auth.js';
@@ -92,6 +93,9 @@ function sendRealtimeEvent(userId: string, event: string, data: any) {
 }
 
 async function startServer() {
+  // Fail fast before accepting traffic if production session signing is not configured.
+  assertAuthConfig();
+
   const app = express();
   const server = http.createServer(app);
   const PORT = 3000;
