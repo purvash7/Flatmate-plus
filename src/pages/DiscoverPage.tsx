@@ -502,19 +502,17 @@ export const DiscoverPage: React.FC<DiscoverPageProps> = ({ onOpenMatchChat, onO
           <div className="min-w-0">
             <p className="text-xs font-extrabold text-[#2B2D42]">
               {currentProfile.discovery_tier === 2
-                ? `Profiles in ${filters.locality || 'your selected area'} are covered`
+                ? `More profiles in ${filters.locality || 'your selected area'}`
                 : currentProfile.discovery_tier === 3
-                  ? `More profiles in ${filters.locality || 'your selected area'}`
-                  : currentProfile.discovery_tier === 4
-                    ? 'Showing profiles from the next nearby area'
-                    : 'Showing more profiles from the wider area'}
+                  ? 'Showing profiles from the next nearby area'
+                  : 'Showing more profiles from the wider area'}
             </p>
             <p className="text-[11px] text-[#7A7D87] mt-0.5 leading-relaxed">
               {currentProfile.discovery_tier === 2
-                ? `These profiles match your selected preferences and are in ${currentProfile.discovery_area || 'a nearby area'}.`
+                ? 'The exact combination of filters is exhausted in this area, so a few softer preferences are relaxed while keeping your core compatibility constraints.'
                 : currentProfile.discovery_tier === 3
-                  ? 'The exact combination of filters has been exhausted, so a few softer preferences are relaxed while keeping your core compatibility constraints.'
-                  : `Your requested area is exhausted. These profiles are from ${currentProfile.discovery_area || 'a nearby area'} so you can keep discovering without removing your filters.`}
+                  ? `Your requested area is exhausted. These profiles are from ${currentProfile.discovery_area || 'a nearby area'} and still match your selected preferences.`
+                  : `Nearby matches are exhausted. These profiles are from ${currentProfile.discovery_area || 'the wider area'} so you can keep discovering while core compatibility constraints remain protected.`}
             </p>
           </div>
         </div>
