@@ -21,6 +21,7 @@ export interface VerificationSession {
   expiresAt: number;
   livenessPassed: boolean;
   livePhoto?: string;
+  verifiedProfilePhotoHash?: string;
 }
 
 const CHALLENGES: VerificationChallenge[] = [
@@ -219,7 +220,8 @@ export async function verifyFaceMatch(sessionId: string, profilePhoto: string) {
   );
 
   if (passed) {
-    invalidateVerificationSession(sessionId);
+    session.verifiedProfilePhotoHash = crypto.createHash('sha256').update(dataUrlToBuffer(profilePhoto)).digest('hex');
+    session.expiresAt = Date.now() + 5 * 60 * 1000;
   }
 
   return {
