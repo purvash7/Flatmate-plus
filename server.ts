@@ -33,7 +33,7 @@ import { db } from './src/db/index.ts';
 import { users as pgUsers } from './src/db/schema.ts';
 import { eq } from 'drizzle-orm';
 import { OAuth2Client } from 'google-auth-library';
-import { createVerificationSession, getVerificationSession, verifyLivenessFrames, verifyFaceMatch as verifyServerFaceMatch, VerificationChallenge } from './server/verification.js';
+import { createVerificationSession, getVerificationSession, verifyLivenessFrames, verifyFaceMatch as verifyServerFaceMatch, consumeVerifiedProfilePhoto, VerificationChallenge } from './server/verification.js';
 import {
   syncUserToPostgres,
   syncProfileToPostgres,
@@ -954,7 +954,7 @@ async function startServer() {
       profile.verification_status = 'verified';
       profile.photo_similarity_score = result.similarity_percentage;
       profile.updated_at = new Date().toISOString();
-      profiles.set(profile.user_id, profile);
+      profiles.set((req as any).user.id, profile);
       syncProfileToPostgres(profile);
 
       res.json({
@@ -1077,13 +1077,14 @@ async function startServer() {
   app.post('/api/profile/upload-photo', requireAuth, (req, res) => {
     try {
       const user = (req as any).user;
-      const { photo_base64, mime_type, caption, is_main } = req.body;
+      const { photo_base64, mime_type, caption, is_main, verification_session_id } = req.body;
 
       if (!photo_base64) {
         return res.status(400).json({ error: 'Please select a photo to upload.' });
       }
 
-      // Liveness and face matching are completed locally before this upload.
+      // Main-photo verification is now server-controlled. A client cannot mark
+      // an arbitrary uploaded photo as verified.
       if (typeof photo_base64 !== 'string' || !photo_base64.startsWith('data:image/')) {
         return res.status(400).json({
           error: 'Invalid photo format. Please upload a valid image.'
@@ -1105,12 +1106,18 @@ async function startServer() {
       };
 
       if (newPhoto.is_main) {
+        if (!verification_session_id || !consumeVerifiedProfilePhoto(verification_session_id, photo_base64)) {
+          return res.status(403).json({
+            error: 'This main profile photo has not completed server-side verification.'
+          });
+        }
         profile.photos.forEach(p => (p.is_main = false));
         profile.main_photo = newPhoto.url;
         profile.is_verified = true;
         profile.verification_status = 'verified';
       }
 
+      newPhoto.verified = Boolean(newPhoto.is_main && profile.is_verified);
       profile.photos.push(newPhoto);
       profile.updated_at = new Date().toISOString();
       profiles.set(user.id, profile);
