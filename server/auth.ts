@@ -109,7 +109,18 @@ export function verifyPassword(password: string, storedHash: string): boolean {
 }
 
 // Simple signed token mechanism
-const SECRET = process.env.JWT_SECRET || 'flatmate_plus_secret_2026_salt';
+const SECRET = process.env.JWT_SECRET;
+
+/**
+ * Production auth configuration must be supplied through the environment.
+ * Never fall back to a predictable signing secret: doing so would allow
+ * anyone who knows the source code to forge valid sessions.
+ */
+export function assertAuthConfig(): void {
+  if (!SECRET || SECRET.length < 32) {
+    throw new Error('JWT_SECRET must be configured and contain at least 32 characters.');
+  }
+}
 
 export function createAuthToken(userId: string): string {
   const payload = {
