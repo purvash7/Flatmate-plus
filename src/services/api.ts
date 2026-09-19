@@ -12,13 +12,15 @@ export const api={
  async verifyOtp(phone:string,otp:string):Promise<{success:boolean;phone_verified:boolean;message:string}>{return request('/api/auth/verify-otp',{method:'POST',body:JSON.stringify({phone,otp})});},
  async getMe():Promise<{user:AuthUser;settings:UserSettings}>{return request('/api/auth/me');},
  async deleteAccount(confirmation:string):Promise<{success:boolean;message:string}>{const r=await request<{success:boolean;message:string}>('/api/auth/delete-account',{method:'DELETE',body:JSON.stringify({confirmation})});clearStoredToken();return r;},
- async verifyLiveness(payload:{photo_base64:string;mime_type:string;challenge?:string}):Promise<{success:boolean;passed:boolean;confidence:number;message:string}>{
-   // Liveness only needs a clear face + gesture. Keep the payload small for faster upload and vision processing.
-   const compressed=await compressImageDataUrl(payload.photo_base64,960,.82,'image/jpeg');
-   const challenged=addLivenessChallenge(compressed,payload.challenge);
-   return request('/api/verify/liveness',{method:'POST',body:JSON.stringify({...payload,photo_base64:challenged,mime_type:'image/jpeg'})});
+ async startVerificationSession():Promise<{success:boolean;session_id:string;challenge:string;expires_at:number}>{return request('/api/verify/session',{method:'POST'});},
+ async verifyLiveness(payload:{session_id:string;challenge:string;frames:string[]}):Promise<{success:boolean;passed:boolean;confidence:number;message:string;frames_analyzed?:number;valid_face_frames?:number}>{
+   const frames=await Promise.all(payload.frames.map(frame=>compressImageDataUrl(frame,640,.72,'image/jpeg')));
+   return request('/api/verify/liveness',{method:'POST',body:JSON.stringify({...payload,frames})});
  },
- async verifyFaceMatch(payload:{live_photo_base64?:string;profile_photo_base64:string;mime_type?:string}):Promise<{success:boolean;passed:boolean;similarity_percentage:number;is_ai_generated:boolean;feedback:string}>{const live=payload.live_photo_base64?await compressImageDataUrl(payload.live_photo_base64,960,.82,'image/jpeg'):undefined;const profile=await compressImageDataUrl(payload.profile_photo_base64,1280,.82,'image/jpeg');return request('/api/verify/face-match',{method:'POST',body:JSON.stringify({...payload,live_photo_base64:live,profile_photo_base64:profile,mime_type:'image/jpeg'})});},
+ async verifyFaceMatch(payload:{session_id:string;profile_photo_base64:string}):Promise<{success:boolean;passed:boolean;similarity_percentage:number;is_ai_generated:boolean;feedback:string;distance?:number;threshold?:number}>{
+   const profile=await compressImageDataUrl(payload.profile_photo_base64,1280,.82,'image/jpeg');
+   return request('/api/verify/face-match',{method:'POST',body:JSON.stringify({...payload,profile_photo_base64:profile})});
+ },
  async updateIntent(intent:{has_house:boolean;looking_to_co_search:boolean;looking_for_vacancy:boolean}):Promise<{profile:UserProfile}>{return request('/api/profile/intent',{method:'PUT',body:JSON.stringify(intent)});},
  async updateProfile(updates:Partial<UserProfile>):Promise<{profile:UserProfile}>{return request('/api/profile',{method:'PUT',body:JSON.stringify(updates)});},
  async uploadPhoto(payload:{photo_base64:string;mime_type:string;caption?:string;is_main?:boolean}):Promise<{success:boolean;photo:any;profile:UserProfile}>{const compressed=await compressImageDataUrl(payload.photo_base64,1600,.78);return request('/api/profile/upload-photo',{method:'POST',body:JSON.stringify({...payload,photo_base64:compressed,mime_type:'image/webp'})});},
