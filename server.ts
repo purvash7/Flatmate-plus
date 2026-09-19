@@ -1102,7 +1102,7 @@ async function startServer() {
         url: photo_base64,
         is_main: is_main ?? (profile.photos.length === 0),
         caption: caption || '',
-        verified: true
+        verified: false
       };
 
       if (newPhoto.is_main) {
