@@ -90,6 +90,15 @@ export function invalidateVerificationSession(id: string) {
   sessions.delete(id);
 }
 
+export function consumeVerifiedProfilePhoto(sessionId: string, profilePhoto: string): boolean {
+  const session = getVerificationSession(sessionId);
+  if (!session?.verifiedProfilePhotoHash) return false;
+  const hash = crypto.createHash('sha256').update(dataUrlToBuffer(profilePhoto)).digest('hex');
+  if (hash !== session.verifiedProfilePhotoHash) return false;
+  sessions.delete(sessionId);
+  return true;
+}
+
 function dataUrlToBuffer(dataUrl: string): Buffer {
   const match = /^data:image\/(jpeg|jpg|png|webp);base64,([A-Za-z0-9+/=\s]+)$/.exec(dataUrl);
   if (!match) throw new Error('Invalid image data.');
