@@ -95,7 +95,7 @@ function sendRealtimeEvent(userId: string, event: string, data: any) {
 
 function getCookie(req: express.Request, name: string): string | null {
   const header = req.headers.cookie || '';
-  const match = header.split(';').map(v => v.trim()).find(v => v.startsWith(`${name}=`));
+  const match = header.split(';').map(v => v.trim()).find(v => v.startsWith(name + '='));
   return match ? decodeURIComponent(match.slice(name.length + 1)) : null;
 }
 
@@ -499,23 +499,17 @@ async function startServer() {
   });
 
   // Google Login / Sign In
-  // The browser sends only Google's signed ID token. The server verifies the
-  // signature, audience, issuer, expiry and nonce before trusting any identity data.
+  // Only a signed Google ID token is accepted. Identity fields are derived from
+  // Google's verified payload on the server, never trusted from browser input.
   app.post('/api/auth/google', async (req, res) => {
     try {
       const { id_token } = req.body as { id_token?: string };
       const googleClientId = process.env.GOOGLE_CLIENT_ID;
-      if (!googleClientId) {
-        return res.status(503).json({ error: 'Google sign-in is not configured on the server.' });
-      }
-      if (!id_token || typeof id_token !== 'string') {
-        return res.status(400).json({ error: 'Google identity token is required.' });
-      }
+      if (!googleClientId) return res.status(503).json({ error: 'Google sign-in is not configured on the server.' });
+      if (!id_token || typeof id_token !== 'string') return res.status(400).json({ error: 'Google identity token is required.' });
 
       const expectedNonce = getCookie(req, 'google_oauth_nonce');
-      if (!expectedNonce) {
-        return res.status(401).json({ error: 'Google sign-in session expired. Please try again.' });
-      }
+      if (!expectedNonce) return res.status(401).json({ error: 'Google sign-in session expired. Please try again.' });
 
       const googleClient = new OAuth2Client(googleClientId);
       const ticket = await googleClient.verifyIdToken({ idToken: id_token, audience: googleClientId });
@@ -530,7 +524,6 @@ async function startServer() {
         return res.status(401).json({ error: 'Invalid Google sign-in session. Please try again.' });
       }
 
-      // Consume the nonce so the same Google assertion cannot be replayed through this flow.
       res.setHeader('Set-Cookie', 'google_oauth_nonce=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0');
 
       const normalizedEmail = payload.email.trim().toLowerCase();
@@ -548,6 +541,8 @@ async function startServer() {
       if (user && !user.google_id) {
         user.google_id = googleId;
         user.email_verified = true;
+        users.set(user.id, user);
+        syncUserToPostgres(user);
       }
 
       if (!user) {
@@ -564,9 +559,61 @@ async function startServer() {
         };
         users.set(userId, user);
 
-        const newProfile: UserProfile = {      const profile = profiles.get(user.id);
-      const token = createAuthToken(user.id);
+        const newProfile: UserProfile = {
+          id: `profile_${userId}`,
+          user_id: userId,
+          name: googleName,
+          date_of_birth: '2000-01-01',
+          age: 26,
+          gender: 'Woman',
+          flatmate_gender_preference: 'Any',
+          city: 'Bangalore',
+          locality: 'Indiranagar',
+          preferred_localities: ['Indiranagar', 'Koramangala'],
+          housing_intent: { has_house: false, looking_to_co_search: true, looking_for_vacancy: true },
+          rent_min: 10000,
+          rent_max: 22000,
+          food_preference: 'Vegetarian',
+          okay_with_nonveg_cooking: true,
+          smoking: 'No',
+          drinking: 'Occasionally',
+          cleanliness: 'Strict',
+          sleep_schedule: 'Flexible',
+          social_level: 'Balanced',
+          guests: 'Weekends only',
+          family_visits: 'Rarely',
+          parties: 'Occasionally',
+          pets: 'Pet lover / Open to pets',
+          work_schedule: 'Hybrid',
+          attached_washroom: 'Must have',
+          furnishing: 'Fully furnished',
+          gated_society: true,
+          hobbies: ['Reading', 'Music'],
+          languages: ['English', 'Hindi'],
+          non_negotiables: [],
+          bio: '',
+          prompts: [],
+          photos: [],
+          main_photo: '',
+          is_verified: false,
+          liveness_verified: false,
+          verification_status: 'unverified',
+          onboarding_step: 1,
+          is_profile_complete: false,
+          discover_active: true,
+          moved_in_status: 'none',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        };
+        profiles.set(userId, newProfile);
+        settingsStore.set(userId, { new_message_banner: true, email_notifications: true, privacy_mode: false });
+        syncUserToPostgres(user);
+        syncProfileToPostgres(newProfile);
+        syncSettingsToPostgres(userId, { new_message_banner: true, email_notifications: true, privacy_mode: false });
+      }
 
+      const profile = profiles.get(user.id);
+      const token = createAuthToken(user.id);
       res.json({
         token,
         user: {
@@ -579,8 +626,9 @@ async function startServer() {
           profile
         }
       });
-    } catch {
-      res.status(500).json({ error: 'Google sign-in failed. Please try again.' });
+    } catch (error) {
+      console.error('Google sign-in verification failed:', error);
+      res.status(401).json({ error: 'Google sign-in could not be verified. Please try again.' });
     }
   });
 
@@ -1879,7 +1927,7 @@ async function startServer() {
     }
 
     const nonce = crypto.randomBytes(32).toString('hex');
-    res.setHeader('Set-Cookie', `google_oauth_nonce=${encodeURIComponent(nonce)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600`);
+    res.setHeader('Set-Cookie', 'google_oauth_nonce=' + encodeURIComponent(nonce) + '; Path=/; HttpOnly; SameSite=Lax; Max-Age=600');
 
     const params = new URLSearchParams({
       client_id: googleClientId,
