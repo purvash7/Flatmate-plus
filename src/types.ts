@@ -171,6 +171,11 @@ export interface DiscoverProfile extends UserProfile {
   match_score?: number;
   match_breakdown?: MatchScoreResult;
   distance_km?: number;
+  discovery_tier?: number;
+  discovery_tier_label?: string;
+  relaxed_filter_level?: number;
+  discovery_area?: string;
+  area_distance_level?: number;
 }
 
 export interface MatchItem {
