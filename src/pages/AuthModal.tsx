@@ -14,19 +14,6 @@ import {
 import { useAuth } from '../context/AuthContext.js';
 import { api } from '../services/api.js';
 
-function decodeGoogleIdToken(idToken: string): { email?: string; name?: string; sub?: string } | null {
-  try {
-    const parts = idToken.split('.');
-    if (parts.length !== 3) return null;
-    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-    const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, '=');
-    const bytes = Uint8Array.from(atob(padded), char => char.charCodeAt(0));
-    return JSON.parse(new TextDecoder().decode(bytes));
-  } catch {
-    return null;
-  }
-}
-
 interface AuthModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -43,7 +30,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const { login, signup, googleLogin, refreshUser } = useAuth();
 
   const [mode, setMode] = useState<'login' | 'signup'>(initialMode);
-  const [step, setStep] = useState<'credentials' | 'otp' | 'google_input'>('credentials');
+  const [step, setStep] = useState<'credentials' | 'otp'>('credentials');
 
   // Form State
   const [email, setEmail] = useState('');
@@ -52,55 +39,37 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [phone, setPhone] = useState('');
   const [otp, setOtp] = useState('');
 
-  // Direct Google Email input fallback if OAuth popup is blocked
-  const [googleEmail, setGoogleEmail] = useState('');
-  const [googleFullName, setGoogleFullName] = useState('');
-
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [devCode, setDevCode] = useState<string | null>(null);
   const [otpSentMsg, setOtpSentMsg] = useState<string | null>(null);
 
-  // Listen for Google OAuth popup callbacks
+  // The popup returns only Google's signed ID token. The server verifies it.
   useEffect(() => {
     const handleOAuthMessage = async (event: MessageEvent) => {
-      // Accept callbacks only from the same origin as the app.
       if (event.origin !== window.location.origin) return;
-      if (event.data?.type === 'GOOGLE_AUTH_CALLBACK') {
-        setLoading(true);
-        try {
-          const { idToken } = event.data;
-          const googleProfile = idToken ? decodeGoogleIdToken(idToken) : null;
-          const resolvedEmail = googleProfile?.email || googleEmail || '';
-          const resolvedName = googleProfile?.name || googleFullName || resolvedEmail.split('@')[0] || 'Google User';
-          const resolvedGoogleId = googleProfile?.sub || undefined;
-          if (!resolvedEmail) {
-            throw new Error('Google did not return an email address. Please try again.');
-          }
+      if (event.data?.type !== 'GOOGLE_AUTH_CALLBACK') return;
 
-          // Populate the onboarding name from the Google account profile.
-          setName(resolvedName);
-          setGoogleEmail(resolvedEmail);
-          setGoogleFullName(resolvedName);
-
-          await googleLogin(
-            resolvedEmail,
-            resolvedName,
-            resolvedGoogleId
-          );
-          onSuccess?.();
-          onClose();
-        } catch (err: any) {
-          setError(err.message || 'Google authentication failed.');
-        } finally {
-          setLoading(false);
+      setLoading(true);
+      try {
+        const idToken = event.data?.idToken;
+        if (!idToken || typeof idToken !== 'string') {
+          throw new Error('Google did not return a valid sign-in token. Please try again.');
         }
+
+        await googleLogin(idToken);
+        onSuccess?.();
+        onClose();
+      } catch (err: any) {
+        setError(err.message || 'Google authentication failed.');
+      } finally {
+        setLoading(false);
       }
     };
 
     window.addEventListener('message', handleOAuthMessage);
     return () => window.removeEventListener('message', handleOAuthMessage);
-  }, [googleEmail, googleFullName, googleLogin, onSuccess, onClose]);
+  }, [googleLogin, onSuccess, onClose]);
 
   if (!isOpen) return null;
 
@@ -161,50 +130,21 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       const response = await fetch('/api/auth/google/url');
       const data = await response.json();
 
-      if (data.configured && data.url) {
-        // Open OAuth Provider's popup directly
-        const authWindow = window.open(
-          data.url,
-          'google_oauth_popup',
-          'width=500,height=600,menubar=no,toolbar=no'
-        );
-
-        if (!authWindow) {
-          // If popup is blocked, switch to Google email verification form
-          setStep('google_input');
-        }
-      } else {
-        // Direct Google Sign In modal
-        setStep('google_input');
+      if (!data.configured || !data.url) {
+        throw new Error('Google sign-in is not configured yet. Please use email sign-in.');
       }
-    } catch {
-      setStep('google_input');
-    } finally {
-      setLoading(false);
-    }
-  };
 
-  const handleGoogleDirectSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!googleEmail.trim()) {
-      setError('Please enter your Google account email.');
-      return;
-    }
-
-    setError(null);
-    setLoading(true);
-
-    try {
-      const gName = googleFullName.trim() || googleEmail.split('@')[0];
-      await googleLogin(
-        googleEmail.trim().toLowerCase(),
-        gName,
-        `gid_${googleEmail.replace(/[^a-zA-Z0-9]/g, '_')}`
+      const authWindow = window.open(
+        data.url,
+        'google_oauth_popup',
+        'width=500,height=600,menubar=no,toolbar=no'
       );
-      onSuccess?.();
-      onClose();
+
+      if (!authWindow) {
+        throw new Error('Please allow pop-ups for FlatMate+ to continue with Google.');
+      }
     } catch (err: any) {
-      setError(err.message || 'Google sign-in failed. Please try again.');
+      setError(err.message || 'Could not start Google sign-in.');
     } finally {
       setLoading(false);
     }
@@ -384,95 +324,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   </button>
                 </p>
               )}
-            </div>
-          </div>
-        )}
-
-        {/* ========================================================= */}
-        {/* STEP: DIRECT GOOGLE ACCOUNT INPUT */}
-        {/* ========================================================= */}
-        {step === 'google_input' && (
-          <div className="space-y-4 animate-in fade-in">
-            <div className="text-center pb-2 border-b border-[#E6E3DE]">
-              <div className="flex items-center justify-center gap-2 mb-2">
-                <svg className="w-6 h-6" viewBox="0 0 24 24">
-                  <path
-                    fill="#4285F4"
-                    d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.8-2.4 3.66v3.05h3.88c2.27-2.09 3.66-5.17 3.66-9.15z"
-                  />
-                  <path
-                    fill="#34A853"
-                    d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.35 24 12 24z"
-                  />
-                  <path
-                    fill="#FBBC05"
-                    d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.17 0 9.99 0 12s.45 3.83 1.25 5.42l4.03-3.15z"
-                  />
-                  <path
-                    fill="#EA4335"
-                    d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.35 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"
-                  />
-                </svg>
-                <span className="font-display font-bold text-lg text-[#2B2D42]">Google Sign In</span>
-              </div>
-              <h4 className="font-bold text-base text-[#2B2D42]">Sign in with your Google account</h4>
-              <p className="text-xs text-[#7A7D87] mt-0.5">
-                Enter your Google account details to link or log in
-              </p>
-            </div>
-
-            <form onSubmit={handleGoogleDirectSubmit} className="space-y-3.5">
-              <div>
-                <label className="label-caps text-[#7A7D87] block mb-1">Google Email Address</label>
-                <input
-                  id="google-account-email-input"
-                  type="email"
-                  required
-                  placeholder="your.google.account@gmail.com"
-                  value={googleEmail}
-                  onChange={e => setGoogleEmail(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-[#E6E3DE] text-sm focus:outline-none focus:ring-2 focus:ring-[#4285F4]/40"
-                />
-              </div>
-
-              <div>
-                <label className="label-caps text-[#7A7D87] block mb-1">Your Full Name</label>
-                <input
-                  id="google-account-name-input"
-                  type="text"
-                  placeholder="Your Name"
-                  value={googleFullName}
-                  onChange={e => setGoogleFullName(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-[#E6E3DE] text-sm focus:outline-none focus:ring-2 focus:ring-[#4285F4]/40"
-                />
-              </div>
-
-              {error && (
-                <div className="bg-[#D64545]/10 border border-[#D64545]/20 rounded-xl p-3 text-xs text-[#D64545] font-semibold text-center">
-                  {error}
-                </div>
-              )}
-
-              <button
-                id="submit-google-direct-btn"
-                type="submit"
-                disabled={loading || !googleEmail.trim()}
-                className="w-full py-3 rounded-2xl bg-[#4285F4] hover:bg-[#3367D6] text-white font-bold text-sm shadow-sm flex items-center justify-center gap-2 min-h-[46px] disabled:opacity-50 transition-all"
-              >
-                <span>{loading ? 'Signing In...' : 'Continue with Google Account'}</span>
-                <ArrowRight className="w-4 h-4" />
-              </button>
-            </form>
-
-            <div className="pt-3 border-t border-[#E6E3DE] flex items-center justify-between text-xs text-[#7A7D87]">
-              <button
-                type="button"
-                onClick={() => setStep('credentials')}
-                className="flex items-center gap-1 font-bold text-[#7A7D87] hover:text-[#2B2D42]"
-              >
-                <ArrowLeft className="w-3.5 h-3.5" />
-                <span>Back to options</span>
-              </button>
             </div>
           </div>
         )}
