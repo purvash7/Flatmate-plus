@@ -2,7 +2,7 @@ import React,{useState,useRef,useEffect,useCallback} from 'react';
 import {Camera,CheckCircle2,AlertCircle,RefreshCw,ShieldCheck,UserCheck} from 'lucide-react';
 import {api} from '../services/api.js';
 import {useAuth} from '../context/AuthContext.js';
-import {LocalChallenge,getGestureChallenge,matchLocalFaces,preloadLocalVerificationModels,runLocalLiveness} from '../services/localVerification.js';
+import {LocalChallenge,getGestureChallenge,preloadLocalVerificationModels,runLocalLiveness} from '../services/localVerification.js';
 
 interface Props{onPhotoUploaded:(photoUrl:string)=>void;existingUrl?:string;isMain?:boolean;}
 type Challenge={id:LocalChallenge;label:string;emoji:string};
