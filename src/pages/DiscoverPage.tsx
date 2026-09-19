@@ -493,6 +493,33 @@ export const DiscoverPage: React.FC<DiscoverPageProps> = ({ onOpenMatchChat, onO
         </div>
       )}
 
+      {/* Progressive discovery context */}
+      {!isReviewMode && currentProfile && currentProfile.discovery_tier && currentProfile.discovery_tier > 1 && (
+        <div className="mb-4 rounded-2xl border border-[#E07A5F]/25 bg-[#FFF7F3] px-4 py-3 flex items-start gap-3">
+          <div className="w-8 h-8 rounded-xl bg-[#E07A5F]/12 text-[#E07A5F] flex items-center justify-center shrink-0">
+            <MapPin className="w-4 h-4" />
+          </div>
+          <div className="min-w-0">
+            <p className="text-xs font-extrabold text-[#2B2D42]">
+              {currentProfile.discovery_tier === 2
+                ? `Profiles in ${filters.locality || 'your selected area'} are covered`
+                : currentProfile.discovery_tier === 3
+                  ? `More profiles in ${filters.locality || 'your selected area'}`
+                  : currentProfile.discovery_tier === 4
+                    ? 'Showing profiles from the next nearby area'
+                    : 'Showing more profiles from the wider area'}
+            </p>
+            <p className="text-[11px] text-[#7A7D87] mt-0.5 leading-relaxed">
+              {currentProfile.discovery_tier === 2
+                ? `These profiles match your selected preferences and are in ${currentProfile.discovery_area || 'a nearby area'}.`
+                : currentProfile.discovery_tier === 3
+                  ? 'The exact combination of filters has been exhausted, so a few softer preferences are relaxed while keeping your core compatibility constraints.'
+                  : `Your requested area is exhausted. These profiles are from ${currentProfile.discovery_area || 'a nearby area'} so you can keep discovering without removing your filters.`}
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Main Discover Layout */}
       {loading && profilesList.length === 0 && passedProfiles.length === 0 ? (
         <div className="min-h-[50vh] flex flex-col items-center justify-center text-center p-8">
