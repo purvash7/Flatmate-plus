@@ -33,6 +33,7 @@ import { db } from './src/db/index.ts';
 import { users as pgUsers } from './src/db/schema.ts';
 import { eq } from 'drizzle-orm';
 import { OAuth2Client } from 'google-auth-library';
+import { createVerificationSession, getVerificationSession, verifyLivenessFrames, verifyFaceMatch as verifyServerFaceMatch, VerificationChallenge } from './server/verification.js';
 import {
   syncUserToPostgres,
   syncProfileToPostgres,
@@ -877,88 +878,98 @@ async function startServer() {
     }
   });
 
-  // 1. Liveness Check with Peace Sign (Requirement #2)
-  app.post('/api/verify/liveness', requireAuth, async (req, res) => {
+  // 1. Start a server-controlled verification session.
+  app.post('/api/verify/session', requireAuth, (req, res) => {
     try {
-      const user = (req as any).user;
-      const { photo_base64, mime_type } = req.body;
-
-      if (!photo_base64) {
-        return res.status(400).json({ error: 'Live photo capture is required.' });
-      }
-
-      // Liveness is verified locally in the browser. This legacy endpoint only
-      // persists the already-verified camera frame when called by older clients.
-      if (typeof photo_base64 !== 'string' || !photo_base64.startsWith('data:image/')) {
-        return res.status(400).json({ error: 'A valid live camera image is required.' });
-      }
-
-      const profile = profiles.get(user.id);
-      if (profile) {
-        profile.liveness_verified = true;
-        profile.live_verification_photo = photo_base64;
-        profile.updated_at = new Date().toISOString();
-        profiles.set(user.id, profile);
-        syncProfileToPostgres(profile);
-      }
-
+      const session = createVerificationSession();
       res.json({
         success: true,
-        passed: true,
-        confidence: 1,
-        message: 'Local liveness verification accepted.'
+        session_id: session.id,
+        challenge: session.challenge,
+        expires_at: session.expiresAt
       });
-    } catch (err: any) {
-      console.error('Liveness check error:', err);
-      res.status(500).json({ error: 'Could not complete liveness verification. Please try again.' });
+    } catch {
+      res.status(500).json({ error: 'Could not start verification. Please try again.' });
     }
   });
 
-  // 2. Face Match & AI Prevention Check (Requirement #3)
-  app.post('/api/verify/face-match', requireAuth, async (req, res) => {
+  // 2. Server-side liveness verification.
+  app.post('/api/verify/liveness', requireAuth, async (req, res) => {
     try {
-      const user = (req as any).user;
-      const { live_photo_base64, profile_photo_base64, mime_type } = req.body;
-
-      const profile = profiles.get(user.id);
-      const effectiveLivePhoto = live_photo_base64 || profile?.live_verification_photo;
-
-      if (!profile_photo_base64) {
-        return res.status(400).json({ error: 'Please select a profile photo to verify.' });
+      const { session_id, challenge, frames } = req.body || {};
+      if (typeof session_id !== 'string' || typeof challenge !== 'string' || !Array.isArray(frames)) {
+        return res.status(400).json({ error: 'A valid verification session and camera sequence are required.' });
       }
 
-      if (!effectiveLivePhoto) {
-        return res.status(400).json({ error: 'Please complete the live peace-sign check first.' });
-      }
-
-      // Face matching is performed locally in the browser. This legacy endpoint
-      // remains only for compatibility with older clients and does not perform
-      // a second server-side face/AI verification pass.
-      if (typeof effectiveLivePhoto !== 'string' || !effectiveLivePhoto.startsWith('data:image/')) {
-        return res.status(400).json({ error: 'A valid live verification image is required.' });
-      }
-      if (typeof profile_photo_base64 !== 'string' || !profile_photo_base64.startsWith('data:image/')) {
-        return res.status(400).json({ error: 'A valid profile photo is required.' });
-      }
-
-      if (profile) {
-        profile.is_verified = true;
-        profile.verification_status = 'verified';
-        profile.updated_at = new Date().toISOString();
-        profiles.set(user.id, profile);
-        syncProfileToPostgres(profile);
-      }
+      const result = await verifyLivenessFrames(
+        session_id,
+        challenge as VerificationChallenge,
+        frames
+      );
 
       res.json({
         success: true,
-        passed: true,
-        similarity_percentage: 100,
-        is_ai_generated: false,
-        feedback: 'Local face verification accepted.'
+        ...result
       });
     } catch (err: any) {
-      console.error('Face match check error:', err);
-      res.status(500).json({ error: 'Could not verify photo match. Please try again.' });
+      console.error('Server liveness verification error:', err);
+      res.status(400).json({
+        success: false,
+        passed: false,
+        confidence: 0,
+        message: err?.message || 'Server-side liveness verification failed.'
+      });
+    }
+  });
+
+  // 3. Server-side face matching. The server uses the live frame held inside
+  // the verification session; the client cannot replace it with another image.
+  app.post('/api/verify/face-match', requireAuth, async (req, res) => {
+    try {
+      const { session_id, profile_photo_base64 } = req.body || {};
+      if (typeof session_id !== 'string' || typeof profile_photo_base64 !== 'string') {
+        return res.status(400).json({ error: 'A verification session and profile photo are required.' });
+      }
+
+      const session = getVerificationSession(session_id);
+      if (!session?.livenessPassed) {
+        return res.status(400).json({ error: 'Please complete the server-side liveness check first.' });
+      }
+
+      const result = await verifyServerFaceMatch(session_id, profile_photo_base64);
+      const profile = profiles.get((req as any).user.id);
+      if (!profile) {
+        return res.status(404).json({ error: 'Profile not found.' });
+      }
+
+      if (!result.passed) {
+        return res.json({
+          success: true,
+          ...result
+        });
+      }
+
+      profile.is_verified = true;
+      profile.liveness_verified = true;
+      profile.verification_status = 'verified';
+      profile.photo_similarity_score = result.similarity_percentage;
+      profile.updated_at = new Date().toISOString();
+      profiles.set(profile.user_id, profile);
+      syncProfileToPostgres(profile);
+
+      res.json({
+        success: true,
+        ...result
+      });
+    } catch (err: any) {
+      console.error('Server face verification error:', err);
+      res.status(400).json({
+        success: false,
+        passed: false,
+        similarity_percentage: 0,
+        is_ai_generated: false,
+        feedback: err?.message || 'Could not verify the profile photo.'
+      });
     }
   });
 
