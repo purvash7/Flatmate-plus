@@ -7,7 +7,7 @@ function addLivenessChallenge(dataUrl:string,challenge?:string){if(!challenge||!
 export const api={
  async signup(payload:{email:string;password:string;name?:string}):Promise<{token:string;user:AuthUser}>{const r=await request<{token:string;user:AuthUser}>('/api/auth/signup',{method:'POST',body:JSON.stringify(payload)});if(r.token)setStoredToken(r.token);return r;},
  async login(payload:{email:string;password:string}):Promise<{token:string;user:AuthUser}>{const r=await request<{token:string;user:AuthUser}>('/api/auth/login',{method:'POST',body:JSON.stringify(payload)});if(r.token)setStoredToken(r.token);return r;},
- async googleAuth(payload:{email:string;name?:string;google_id?:string;photo_url?:string}):Promise<{token:string;user:AuthUser}>{const r=await request<{token:string;user:AuthUser}>('/api/auth/google',{method:'POST',body:JSON.stringify(payload)});if(r.token)setStoredToken(r.token);return r;},
+ async googleAuth(payload:{id_token:string}):Promise<{token:string;user:AuthUser}>{const r=await request<{token:string;user:AuthUser}>('/api/auth/google',{method:'POST',body:JSON.stringify(payload)});if(r.token)setStoredToken(r.token);return r;},
  async sendOtp(phone:string):Promise<{success:boolean;message:string;dev_code?:string}>{return request('/api/auth/send-otp',{method:'POST',body:JSON.stringify({phone})});},
  async verifyOtp(phone:string,otp:string):Promise<{success:boolean;phone_verified:boolean;message:string}>{return request('/api/auth/verify-otp',{method:'POST',body:JSON.stringify({phone,otp})});},
  async getMe():Promise<{user:AuthUser;settings:UserSettings}>{return request('/api/auth/me');},
