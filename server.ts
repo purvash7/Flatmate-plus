@@ -1282,13 +1282,13 @@ async function startServer() {
 
         const location = getLocalityTier(targetProf);
 
-        // Build a progressive discovery queue:
-        // 1. Exact/explicit preferred area + all filters
-        // 2. Nearby area + all filters
-        // 3. Same requested area + relaxed preferences/budget
-        // 4. Nearby/other areas + relaxed preferences/budget
-        // This guarantees useful fallback profiles without silently violating
-        // non-negotiables, gender, or housing intent.
+        // Progressive discovery order:
+        // 1. Requested locality + all selected preferences
+        // 2. Requested locality + relaxed preferences
+        // 3. Nearby locality + all selected preferences
+        // 4. Wider area + relaxed preferences as the final fallback
+        // Hard compatibility constraints (gender, housing intent, dealbreakers,
+        // active status, blocks and swipes) are never relaxed.
         let tier = 4;
         let tierLabel = location.label;
         let relaxedLevel = 2;
@@ -1297,24 +1297,20 @@ async function startServer() {
           tier = 1;
           tierLabel = location.label;
           relaxedLevel = 0;
-        } else if (location.tier === 2 && matchesFilterSet(targetProf, 0)) {
-          tier = 2;
-          tierLabel = location.label;
-          relaxedLevel = 0;
         } else if (location.tier <= 1 && matchesFilterSet(targetProf, 1)) {
-          tier = 3;
-          tierLabel = `More matches in ${targetProf.locality}`;
+          tier = 2;
+          tierLabel = `More profiles in ${targetProf.locality}`;
           relaxedLevel = 1;
         } else if (location.tier <= 1 && matchesFilterSet(targetProf, 2)) {
-          tier = 3;
+          tier = 2;
           tierLabel = `More profiles in ${targetProf.locality}`;
           relaxedLevel = 2;
-        } else if (location.tier === 2 && matchesFilterSet(targetProf, 1)) {
-          tier = 4;
+        } else if (location.tier === 2 && matchesFilterSet(targetProf, 0)) {
+          tier = 3;
           tierLabel = `Nearby area • ${targetProf.locality}`;
-          relaxedLevel = 1;
+          relaxedLevel = 0;
         } else if (matchesFilterSet(targetProf, 2)) {
-          tier = 5;
+          tier = 4;
           tierLabel = `Wider area • ${targetProf.locality}`;
           relaxedLevel = 2;
         } else {
