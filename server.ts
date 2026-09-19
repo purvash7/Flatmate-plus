@@ -1009,7 +1009,7 @@ async function startServer() {
         url: photo_base64,
         is_main: profile.house_details.house_photos.length === 0,
         caption: caption || 'House photo',
-        verified: true
+        verified: false
       };
 
       profile.house_details.house_photos.push(newHousePhoto);
