@@ -32,6 +32,7 @@ import { UserProfile, MatchItem, MessageItem, DiscoverFilters } from './src/type
 import { db } from './src/db/index.ts';
 import { users as pgUsers } from './src/db/schema.ts';
 import { eq } from 'drizzle-orm';
+import { OAuth2Client } from 'google-auth-library';
 import {
   syncUserToPostgres,
   syncProfileToPostgres,
@@ -90,6 +91,12 @@ function sendRealtimeEvent(userId: string, event: string, data: any) {
       sseClients.delete(userId);
     }
   }
+}
+
+function getCookie(req: express.Request, name: string): string | null {
+  const header = req.headers.cookie || '';
+  const match = header.split(';').map(v => v.trim()).find(v => v.startsWith(`${name}=`));
+  return match ? decodeURIComponent(match.slice(name.length + 1)) : null;
 }
 
 async function startServer() {
@@ -492,29 +499,58 @@ async function startServer() {
   });
 
   // Google Login / Sign In
-  app.post('/api/auth/google', (req, res) => {
+  // The browser sends only Google's signed ID token. The server verifies the
+  // signature, audience, issuer, expiry and nonce before trusting any identity data.
+  app.post('/api/auth/google', async (req, res) => {
     try {
-      const { email, name, google_id, photo_url } = req.body;
-      if (!email) {
-        return res.status(400).json({ error: 'Google account email not received.' });
+      const { id_token } = req.body as { id_token?: string };
+      const googleClientId = process.env.GOOGLE_CLIENT_ID;
+      if (!googleClientId) {
+        return res.status(503).json({ error: 'Google sign-in is not configured on the server.' });
+      }
+      if (!id_token || typeof id_token !== 'string') {
+        return res.status(400).json({ error: 'Google identity token is required.' });
       }
 
-      const normalizedEmail = email.trim().toLowerCase();
+      const expectedNonce = getCookie(req, 'google_oauth_nonce');
+      if (!expectedNonce) {
+        return res.status(401).json({ error: 'Google sign-in session expired. Please try again.' });
+      }
+
+      const googleClient = new OAuth2Client(googleClientId);
+      const ticket = await googleClient.verifyIdToken({ idToken: id_token, audience: googleClientId });
+      const payload = ticket.getPayload();
+      if (!payload?.sub || !payload.email || payload.email_verified !== true) {
+        return res.status(401).json({ error: 'Google account could not be verified.' });
+      }
+      if (payload.iss !== 'https://accounts.google.com' && payload.iss !== 'accounts.google.com') {
+        return res.status(401).json({ error: 'Invalid Google identity issuer.' });
+      }
+      if (payload.nonce !== expectedNonce) {
+        return res.status(401).json({ error: 'Invalid Google sign-in session. Please try again.' });
+      }
+
+      // Consume the nonce so the same Google assertion cannot be replayed through this flow.
+      res.setHeader('Set-Cookie', 'google_oauth_nonce=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0');
+
+      const normalizedEmail = payload.email.trim().toLowerCase();
+      const googleId = payload.sub;
+      const googleName = payload.name?.trim() || normalizedEmail.split('@')[0] || 'Google User';
       let user: any = null;
 
-      // Find existing user by google_id or email
       for (const u of users.values()) {
-        if ((google_id && u.google_id === google_id) || u.email === normalizedEmail) {
+        if (u.google_id === googleId || u.email === normalizedEmail) {
           user = u;
-          if (google_id && !u.google_id) {
-            u.google_id = google_id;
-          }
           break;
         }
       }
 
+      if (user && !user.google_id) {
+        user.google_id = googleId;
+        user.email_verified = true;
+      }
+
       if (!user) {
-        // Create new user via Google
         const userId = `user_g_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
         user = {
           id: userId,
@@ -523,66 +559,12 @@ async function startServer() {
           password_hash: '',
           phone_verified: false,
           email_verified: true,
-          google_id: google_id || `gid_${Date.now()}`,
+          google_id: googleId,
           created_at: new Date().toISOString()
         };
         users.set(userId, user);
 
-        const newProfile: UserProfile = {
-          id: `profile_${userId}`,
-          user_id: userId,
-          name: name || 'Google User',
-          date_of_birth: '2000-01-01',
-          age: 26,
-          gender: 'Woman',
-          flatmate_gender_preference: 'Any',
-          city: 'Bangalore',
-          locality: 'Indiranagar',
-          preferred_localities: ['Indiranagar', 'Koramangala'],
-          housing_intent: {
-            has_house: false,
-            looking_to_co_search: true,
-            looking_for_vacancy: true
-          },
-          rent_min: 10000,
-          rent_max: 22000,
-          food_preference: 'Vegetarian',
-          okay_with_nonveg_cooking: true,
-          smoking: 'No',
-          drinking: 'Occasionally',
-          cleanliness: 'Strict',
-          sleep_schedule: 'Flexible',
-          social_level: 'Balanced',
-          guests: 'Weekends only',
-          family_visits: 'Rarely',
-          parties: 'Occasionally',
-          pets: 'Pet lover / Open to pets',
-          work_schedule: 'Hybrid',
-          attached_washroom: 'Must have',
-          furnishing: 'Fully furnished',
-          gated_society: true,
-          hobbies: ['Reading', 'Music'],
-          languages: ['English', 'Hindi'],
-          non_negotiables: [],
-          bio: '',
-          prompts: [],
-          photos: photo_url ? [{ id: 'gp1', url: photo_url, is_main: true, verified: true }] : [],
-          main_photo: photo_url || '',
-          is_verified: !!photo_url,
-          liveness_verified: false,
-          verification_status: photo_url ? 'verified' : 'unverified',
-          onboarding_step: 1,
-          is_profile_complete: false,
-          discover_active: true,
-          moved_in_status: 'none',
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        };
-        profiles.set(userId, newProfile);
-        settingsStore.set(userId, { new_message_banner: true, email_notifications: true, privacy_mode: false });
-      }
-
-      const profile = profiles.get(user.id);
+        const newProfile: UserProfile = {      const profile = profiles.get(user.id);
       const token = createAuthToken(user.id);
 
       res.json({
@@ -1896,13 +1878,16 @@ async function startServer() {
       });
     }
 
+    const nonce = crypto.randomBytes(32).toString('hex');
+    res.setHeader('Set-Cookie', `google_oauth_nonce=${encodeURIComponent(nonce)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600`);
+
     const params = new URLSearchParams({
       client_id: googleClientId,
       redirect_uri: redirectUri,
       response_type: 'token id_token',
       scope: 'openid email profile',
       prompt: 'select_account',
-      nonce: crypto.randomBytes(8).toString('hex')
+      nonce
     });
 
     const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
@@ -1937,7 +1922,7 @@ async function startServer() {
                   type: 'GOOGLE_AUTH_CALLBACK',
                   accessToken,
                   idToken
-                }, '*');
+                }, window.location.origin);
                 setTimeout(() => window.close(), 600);
               } else {
                 window.location.href = '/';
