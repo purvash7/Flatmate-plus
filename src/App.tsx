@@ -10,6 +10,7 @@ import { MatchesPage } from './pages/MatchesPage.js';
 import { ProfilePage } from './pages/ProfilePage.js';
 import { SettingsPage } from './pages/SettingsPage.js';
 import { AuthModal } from './pages/AuthModal.js';
+import { Walkthrough } from './components/Walkthrough.js';
 
 const MainApp: React.FC = () => {
   const { user, profile, loading } = useAuth();
@@ -18,6 +19,20 @@ const MainApp: React.FC = () => {
   const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('signup');
   const [previewGuestMode, setPreviewGuestMode] = useState(false);
+  const [showWalkthrough, setShowWalkthrough] = useState(false);
+
+  React.useEffect(() => {
+    if (user && profile?.is_profile_complete) {
+      setShowWalkthrough(window.localStorage.getItem('flatmate_walkthrough_pending') === '1');
+    } else {
+      setShowWalkthrough(false);
+    }
+  }, [user, profile?.is_profile_complete]);
+
+  const completeWalkthrough = () => {
+    window.localStorage.removeItem('flatmate_walkthrough_pending');
+    setShowWalkthrough(false);
+  };
 
   if (loading) {
     return (
@@ -56,7 +71,7 @@ const MainApp: React.FC = () => {
         {activeTab === 'profile' && <ProfilePage />}
         {activeTab === 'settings' && <SettingsPage />}
       </main>
-      {isAuthOpen && (
+      {showWalkthrough && <Walkthrough onComplete={completeWalkthrough} />}\n      {isAuthOpen && (
         <AuthModal
           isOpen={isAuthOpen}
           initialMode={authMode}
