@@ -146,6 +146,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const signup = async (email: string, pass: string, name?: string) => {
     const res = await api.signup({ email, password: pass, name });
+    window.localStorage.setItem('flatmate_walkthrough_pending', '1');
     setUser(res.user);
     setProfile(res.user.profile || null);
     wsService.connect();
@@ -153,6 +154,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const googleLogin = async (idToken: string) => {
     const res = await api.googleAuth({ id_token: idToken });
+    window.localStorage.setItem('flatmate_walkthrough_pending', '1');
     setUser(res.user);
     setProfile(res.user.profile || null);
     wsService.connect();
@@ -160,6 +162,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const logout = () => {
     wsService.disconnect();
+    window.localStorage.removeItem('flatmate_walkthrough_pending');
     clearStoredToken();
     setUser(null);
     setProfile(null);
