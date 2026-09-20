@@ -2006,7 +2006,7 @@ async function startServer() {
   // 5. VITE MIDDLEWARE & STATIC ASSETS
   // ==========================================
 
-  app.get('/api/health', (_req, res) => {\n    res.json({ ok: true, service: 'flatmate-plus' });\n  });\n\n  // Keep missing API routes JSON so the client never tries to parse the SPA HTML as JSON.\n  app.use('/api', (_req, res) => {\n    res.status(404).json({ error: 'API endpoint not found.' });\n  });\n\n  if (process.env.NODE_ENV !== 'production') {
+  if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa'
