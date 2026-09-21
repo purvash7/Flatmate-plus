@@ -1,7 +1,34 @@
 import { AuthUser, UserProfile, DiscoverProfile, MatchItem, MessageItem, BlockRecord, UserSettings, DiscoverFilters } from '../types.js';
 const TOKEN_KEY='flatmate_plus_token';
 export function getStoredToken():string|null{return localStorage.getItem(TOKEN_KEY);} export function setStoredToken(token:string){localStorage.setItem(TOKEN_KEY,token);} export function clearStoredToken(){localStorage.removeItem(TOKEN_KEY);}
-async function request<T>(endpoint:string,options:RequestInit={}):Promise<T>{const token=getStoredToken();const headers:Record<string,string>={'Content-Type':'application/json',...(options.headers as Record<string,string>||{})};if(token)headers.Authorization=`Bearer ${token}`;try{const res=await fetch(endpoint,{...options,headers});const data=await res.json();if(!res.ok)throw new Error(data.error||'Something went wrong. Please try again.');return data as T;}catch(err:any){if(err.message?.includes('Failed to fetch'))throw new Error("Couldn't reach the server. Please check your internet connection.");throw err;}}
+async function request<T>(endpoint:string,options:RequestInit={},retryEmptyResponse=false):Promise<T>{
+ const token=getStoredToken();
+ const headers:Record<string,string>={'Content-Type':'application/json',...(options.headers as Record<string,string>||{})};
+ if(token)headers.Authorization='Bearer '+token;
+ try{
+   const res=await fetch(endpoint,{...options,headers});
+   const raw=await res.text();
+   if(!raw.trim()){
+     if(retryEmptyResponse){
+       await new Promise(resolve=>setTimeout(resolve,700));
+       const retry=await fetch(endpoint,{...options,headers});
+       const retryRaw=await retry.text();
+       if(!retryRaw.trim()) throw new Error('Verification server returned an empty response (HTTP '+retry.status+'). Please try the live check again.');
+       let retryData:any;
+       try{retryData=JSON.parse(retryRaw);}catch{throw new Error('Verification server returned an invalid response (HTTP '+retry.status+'). Please try again.');}
+       if(!retry.ok)throw new Error(retryData?.error||retryData?.message||('Verification failed (HTTP '+retry.status+').'));
+       return retryData as T;
+     }
+     throw new Error('Server returned an empty response (HTTP '+res.status+'). Please try again.');
+   }
+   let data:any;
+   try{data=JSON.parse(raw);}catch{throw new Error('Server returned an invalid response (HTTP '+res.status+'). Please try again.');}
+   if(!res.ok)throw new Error(data?.error||data?.message||('Request failed (HTTP '+res.status+').'));
+   return data as T;
+ }catch(err:any){
+   if(err.message?.includes('Failed to fetch'))throw new Error("Couldn't reach the server. Please check your internet connection.");
+   throw err;
+ }}
 export async function compressImageDataUrl(dataUrl:string,maxDimension=1600,quality=.78,outputMime:'image/webp'|'image/jpeg'='image/webp'):Promise<string>{if(!dataUrl?.startsWith('data:image/'))return dataUrl;return new Promise(resolve=>{const img=new Image();img.onload=()=>{const scale=Math.min(1,maxDimension/Math.max(img.naturalWidth,img.naturalHeight));const c=document.createElement('canvas');c.width=Math.max(1,Math.round(img.naturalWidth*scale));c.height=Math.max(1,Math.round(img.naturalHeight*scale));const ctx=c.getContext('2d');if(!ctx){resolve(dataUrl);return;}ctx.drawImage(img,0,0,c.width,c.height);resolve(c.toDataURL(outputMime,quality));};img.onerror=()=>resolve(dataUrl);img.src=dataUrl;});}
 function addLivenessChallenge(dataUrl:string,challenge?:string){if(!challenge||!dataUrl.startsWith('data:'))return dataUrl;return dataUrl.replace(/^data:([^;]+);base64,/,`data:$1;challenge=${challenge};base64,`);}
 export const api={
@@ -15,7 +42,7 @@ export const api={
  async startVerificationSession():Promise<{success:boolean;session_id:string;challenge:string;expires_at:number}>{return request('/api/verify/session',{method:'POST'});},
  async verifyLiveness(payload:{session_id:string;challenge:string;frames:string[]}):Promise<{success:boolean;passed:boolean;confidence:number;message:string;frames_analyzed?:number;valid_face_frames?:number}>{
    const frames=await Promise.all(payload.frames.map(frame=>compressImageDataUrl(frame,640,.72,'image/jpeg')));
-   return request('/api/verify/liveness',{method:'POST',body:JSON.stringify({...payload,frames})});
+   return request('/api/verify/liveness',{method:'POST',body:JSON.stringify({...payload,frames})},true);
  },
  async verifyFaceMatch(payload:{session_id:string;profile_photo_base64:string}):Promise<{success:boolean;passed:boolean;similarity_percentage:number;is_ai_generated:boolean;feedback:string;distance?:number;threshold?:number}>{
    const profile=await compressImageDataUrl(payload.profile_photo_base64,1280,.82,'image/jpeg');
