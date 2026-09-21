@@ -40,6 +40,10 @@ function modelPath() {
   return path.resolve(process.cwd(), 'node_modules/@vladmandic/face-api/model');
 }
 
+export async function warmupVerificationModels() {
+  await ensureModels();
+}
+
 async function ensureModels() {
   if (!modelsPromise) {
     modelsPromise = (async () => {
