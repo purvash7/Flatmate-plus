@@ -111,11 +111,19 @@ function dataUrlToBuffer(dataUrl: string): Buffer {
 
 async function detectFace(dataUrl: string) {
   const image = await canvas.loadImage(dataUrlToBuffer(dataUrl));
+  const detection = await faceapi.detectAllFaces(
+    image,
+    new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.45 })
+  );
+  return { image, detection };
+}
+
+async function detectFaceWithDescriptor(dataUrl: string) {
+  const image = await canvas.loadImage(dataUrlToBuffer(dataUrl));
   const detection = await faceapi
-    .detectAllFaces(image, new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.55 }))
+    .detectAllFaces(image, new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.50 }))
     .withFaceLandmarks()
     .withFaceDescriptors();
-
   return { image, detection };
 }
 
@@ -137,62 +145,57 @@ export async function verifyLivenessFrames(
   challenge: VerificationChallenge,
   frames: string[]
 ) {
-  await ensureModels();
   const session = getVerificationSession(sessionId);
   if (!session) throw new Error('Verification session expired. Please start again.');
   if (session.challenge !== challenge) throw new Error('Verification challenge does not match the active session.');
-  if (!Array.isArray(frames) || frames.length < 6 || frames.length > 16) {
+  if (!Array.isArray(frames) || frames.length < 6 || frames.length > 12) {
     throw new Error('A short camera sequence is required for liveness verification.');
   }
 
-  const results: any[] = [];
+  await ensureModels();
+
+  const accepted: { index: number; score: number; box: any }[] = [];
   const hashes = new Set<string>();
 
-  for (const frame of frames) {
+  for (let i = 0; i < frames.length; i++) {
+    const frame = frames[i];
     if (typeof frame !== 'string') throw new Error('Invalid verification frame.');
     const buffer = dataUrlToBuffer(frame);
     hashes.add(crypto.createHash('sha256').update(buffer).digest('hex'));
+
     const result = await detectFace(frame);
-    if (result.detection.length !== 1) {
-      continue;
+    if (result.detection.length !== 1) continue;
+    const score = result.detection[0].score ?? 0;
+    if (score >= 0.45) {
+      accepted.push({ index: i, score, box: result.detection[0].box });
     }
-    if (result.detection[0].detection.score < 0.60) continue;
-    results.push(result);
   }
 
-  if (results.length < 6) {
-    throw new Error('Your face was not consistently visible. Please keep your face clearly inside the camera frame.');
+  if (accepted.length < 5) {
+    throw new Error('We could not keep your face visible throughout the live check. Move slightly closer, improve lighting, and try again.');
   }
 
   let movement = 0;
-  for (let i = 1; i < results.length; i++) {
-    movement += faceMotion(results[i - 1], results[i]);
+  for (let i = 1; i < accepted.length; i++) {
+    movement += faceMotion(accepted[i - 1], accepted[i]);
   }
-  const averageMovement = movement / Math.max(1, results.length - 1);
-  const distinctFrames = hashes.size;
+  const averageMovement = movement / Math.max(1, accepted.length - 1);
 
-  // The server requires a real sequence rather than one repeated still image.
-  // Face presence is independently detected on every accepted frame.
-  const passed = distinctFrames >= 4 && averageMovement >= 0.006;
-  if (!passed) {
-    throw new Error('The camera sequence did not show enough natural change. Please perform the requested gesture and try again.');
+  if (hashes.size < 4 || averageMovement < 0.0035) {
+    throw new Error('Please move your head or hand naturally while showing the requested sign, then try again.');
   }
 
-  const best = results.reduce((a, b) =>
-    a.detection[0].detection.score >= b.detection[0].detection.score ? a : b
-  );
-
-  const livePhoto = frames[Math.floor(frames.length / 2)];
+  const best = accepted.reduce((a, b) => a.score >= b.score ? a : b);
   session.livenessPassed = true;
-  session.livePhoto = livePhoto;
+  session.livePhoto = frames[best.index];
   session.expiresAt = Date.now() + 5 * 60 * 1000;
 
   return {
     passed: true,
-    confidence: Math.round(Math.min(99, 70 + averageMovement * 500)),
+    confidence: Math.round(Math.min(99, 82 + Math.min(17, averageMovement * 100))),
     message: 'Server-side liveness verification passed.',
     frames_analyzed: frames.length,
-    valid_face_frames: results.length,
+    valid_face_frames: accepted.length,
     challenge
   };
 }
@@ -204,8 +207,10 @@ export async function verifyFaceMatch(sessionId: string, profilePhoto: string) {
     throw new Error('Please complete server-side liveness verification first.');
   }
 
-  const live = await detectFace(session.livePhoto);
-  const profile = await detectFace(profilePhoto);
+  const [live, profile] = await Promise.all([
+    detectFaceWithDescriptor(session.livePhoto),
+    detectFaceWithDescriptor(profilePhoto)
+  ]);
 
   if (live.detection.length !== 1 || profile.detection.length !== 1) {
     throw new Error('Each photo must contain exactly one clear face.');
@@ -213,7 +218,7 @@ export async function verifyFaceMatch(sessionId: string, profilePhoto: string) {
 
   const liveScore = live.detection[0].detection.score;
   const profileScore = profile.detection[0].detection.score;
-  if (liveScore < 0.60 || profileScore < 0.60) {
+  if (liveScore < 0.50 || profileScore < 0.50) {
     throw new Error('The face is not clear enough to verify. Please use a sharper, well-lit photo.');
   }
 
@@ -223,13 +228,12 @@ export async function verifyFaceMatch(sessionId: string, profilePhoto: string) {
   );
   const threshold = 0.55;
   const passed = distance <= threshold;
-  const similarity = Math.max(
-    0,
-    Math.min(100, Math.round(100 * (1 - distance / 0.8)))
-  );
+  const similarity = Math.max(0, Math.min(100, Math.round(100 * (1 - distance / 0.8))));
 
   if (passed) {
-    session.verifiedProfilePhotoHash = crypto.createHash('sha256').update(dataUrlToBuffer(profilePhoto)).digest('hex');
+    session.verifiedProfilePhotoHash = crypto.createHash('sha256')
+      .update(dataUrlToBuffer(profilePhoto))
+      .digest('hex');
     session.expiresAt = Date.now() + 5 * 60 * 1000;
   }
 
