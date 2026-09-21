@@ -33,7 +33,7 @@ import { db } from './src/db/index.ts';
 import { users as pgUsers } from './src/db/schema.ts';
 import { eq } from 'drizzle-orm';
 import { OAuth2Client } from 'google-auth-library';
-import { createVerificationSession, getVerificationSession, verifyLivenessFrames, verifyFaceMatch as verifyServerFaceMatch, consumeVerifiedProfilePhoto, VerificationChallenge, warmupVerificationModels } from './server/verification.js';
+import { createVerificationSession, getVerificationSession, verifyLivenessFrames, verifyFaceMatch as verifyServerFaceMatch, consumeVerifiedProfilePhoto, VerificationChallenge } from './server/verification.js';
 import {
   syncUserToPostgres,
   syncProfileToPostgres,
@@ -42,9 +42,6 @@ import {
   syncSwipeToPostgres,
   syncSettingsToPostgres
 } from './server/postgresSync.js';
-
-// Warm the face models during server startup so the first verification request does not pay the model-load cost.
-void warmupVerificationModels().catch(error => console.error('Verification model warmup failed:', error));
 
 // Ensure seed data is initialized
 if (process.env.SEED_DUMMY_DATA !== 'false') {
