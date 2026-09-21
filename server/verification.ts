@@ -128,8 +128,8 @@ async function detectFaceWithDescriptor(dataUrl: string) {
 }
 
 function faceMotion(a: any, b: any) {
-  const ax = a.detection.box;
-  const bx = b.detection.box;
+  const ax = a.box;
+  const bx = b.box;
   const aCx = ax.x + ax.width / 2;
   const aCy = ax.y + ax.height / 2;
   const bCx = bx.x + bx.width / 2;
