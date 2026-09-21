@@ -60,8 +60,11 @@ export function getGestureChallenge(challenge:LocalChallenge){return GESTURES[ch
 export async function runLocalLiveness(video:HTMLVideoElement,challenge:LocalChallenge,onProgress?:(message:string)=>void,onFrame?:(frame:string)=>void):Promise<LocalLivenessResult>{
   const recognizer=await getGestureRecognizer();
   const target=GESTURES[challenge].apiName;
+  await ensureFaceModels();
+  const faceOptions=new faceapi.TinyFaceDetectorOptions({inputSize:224,scoreThreshold:.45});
   const started=performance.now();
   const frames:string[]=[];
+  let validFaceFrames=0;
   let matchingFrames=0;
   let analyzed=0;
   let bestGestureScore=0;
@@ -70,6 +73,9 @@ export async function runLocalLiveness(video:HTMLVideoElement,challenge:LocalCha
   while(performance.now()-started<4200&&frames.length<10){
     if(video.readyState>=2&&video.videoWidth&&video.videoHeight){
       analyzed++;
+      let faceVisible=false;
+      try{ faceVisible=Boolean(await faceapi.detectSingleFace(video,faceOptions)); }catch{}
+      if(faceVisible) validFaceFrames++;
       let matched=false;
       if(recognizer){
         try{
@@ -104,15 +110,16 @@ export async function runLocalLiveness(video:HTMLVideoElement,challenge:LocalCha
     await new Promise(resolve=>setTimeout(resolve,180));
   }
 
-  const gesturePassed=!recognizer||matchingFrames>=2;
-  if(frames.length<6||!gesturePassed){
+  const gesturePassed=Boolean(recognizer)&&matchingFrames>=2;
+  const facePassed=validFaceFrames>=6;
+  if(frames.length<6||!gesturePassed||!facePassed){
     return{
       passed:false,
       confidence:Math.round((matchingFrames/Math.max(1,frames.length))*100),
-      message:recognizer
-        ? 'Please show '+GESTURES[challenge].label+' clearly with one hand while keeping your face visible, then try again.'
-        : 'Please keep your face visible and move naturally while showing the requested sign, then try again.',
-      faceCount:0,
+      message:!facePassed
+        ? 'Keep your whole face clearly visible in the camera while showing the requested sign, then try again.'
+        : 'Please show '+GESTURES[challenge].label+' clearly with one hand while keeping your face visible, then try again.',
+      faceCount:validFaceFrames>0?1:0,
       framesAnalyzed:analyzed,
       gesture:challenge
     };
