@@ -100,13 +100,13 @@ function getCookie(req: express.Request, name: string): string | null {
   return match ? decodeURIComponent(match.slice(name.length + 1)) : null;
 }
 
-async function startServer() {
+async function createServer() {
   // Fail fast before accepting traffic if production session signing is not configured.
   assertAuthConfig();
 
   const app = express();
   const server = http.createServer(app);
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT || 3000);
 
   // Initialize WebSocket Server
   const wss = new WebSocketServer({ server, path: '/ws' });
@@ -2007,9 +2007,14 @@ async function startServer() {
     });
   }
 
-  server.listen(PORT, '0.0.0.0', () => {
-    console.log(`FlatMate+ server running on http://0.0.0.0:${PORT}`);
-  });
+  return server;
 }
 
-startServer();
+// Vercel detects the exported handler/server and manages the HTTP lifecycle.
+// Locally, `npm run dev` still starts the same Express server through server-entry.ts.
+export const serverPromise = createServer();
+
+export default async function handler(req: any, res: any) {
+  const server = await serverPromise;
+  return server.emit('request', req, res);
+}
