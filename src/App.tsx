@@ -23,7 +23,9 @@ const MainApp: React.FC = () => {
 
   React.useEffect(() => {
     if (user && profile?.is_profile_complete) {
-      setShowWalkthrough(window.localStorage.getItem('flatmate_walkthrough_pending') === '1');
+      const pending = window.localStorage.getItem('flatmate_walkthrough_pending') === '1';
+      const completed = window.localStorage.getItem('flatmate_walkthrough_completed') === '1';
+      setShowWalkthrough(pending || !completed);
     } else {
       setShowWalkthrough(false);
     }
@@ -31,6 +33,7 @@ const MainApp: React.FC = () => {
 
   const completeWalkthrough = () => {
     window.localStorage.removeItem('flatmate_walkthrough_pending');
+    window.localStorage.setItem('flatmate_walkthrough_completed', '1');
     setShowWalkthrough(false);
   };
 
