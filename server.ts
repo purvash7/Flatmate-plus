@@ -2008,16 +2008,20 @@ async function createServer() {
     });
   }
 
-  return server;
+  return { app, server };
 }
 
 // Initialize PostgreSQL before the server begins accepting requests.
 await initializePostgresPersistence();
 
-const server = await createServer();
+const { app, server } = await createServer();
 
-// Vercel's zero-config Node server deployment starts root server.ts
-// as a long-running Node process and expects the server to listen on PORT.
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`FlatMate+ server running on http://0.0.0.0:${PORT}`);
-});
+// Vercel's Express integration handles the exported app.
+// Locally, keep the HTTP server (including WebSocket support) listening normally.
+if (!process.env.VERCEL) {
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log(`FlatMate+ server running on http://0.0.0.0:${PORT}`);
+  });
+}
+
+export default app;
