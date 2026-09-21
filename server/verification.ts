@@ -34,31 +34,42 @@ const CHALLENGES: VerificationChallenge[] = [
 ];
 
 const sessions = new Map<string, VerificationSession>();
-let modelsPromise: Promise<void> | null = null;
+let livenessModelsPromise: Promise<void> | null = null;
+let faceMatchModelsPromise: Promise<void> | null = null;
 
 function modelPath() {
   return path.resolve(process.cwd(), 'node_modules/@vladmandic/face-api/model');
 }
 
 export async function warmupVerificationModels() {
-  await ensureModels();
+  await ensureLivenessModels();
 }
 
-async function ensureModels() {
-  if (!modelsPromise) {
-    modelsPromise = (async () => {
+async function ensureLivenessModels() {
+  if (!livenessModelsPromise) {
+    livenessModelsPromise = (async () => {
       await tf.ready();
-      await Promise.all([
-        faceapi.nets.tinyFaceDetector.loadFromDisk(modelPath()),
-        faceapi.nets.faceLandmark68Net.loadFromDisk(modelPath()),
-        faceapi.nets.faceRecognitionNet.loadFromDisk(modelPath())
-      ]);
+      await faceapi.nets.tinyFaceDetector.loadFromDisk(modelPath());
     })().catch(error => {
-      modelsPromise = null;
+      livenessModelsPromise = null;
       throw error;
     });
   }
-  return modelsPromise;
+  return livenessModelsPromise;
+}
+
+async function ensureFaceMatchModels() {
+  await ensureLivenessModels();
+  if (!faceMatchModelsPromise) {
+    faceMatchModelsPromise = (async () => {
+      await faceapi.nets.faceLandmark68Net.loadFromDisk(modelPath());
+      await faceapi.nets.faceRecognitionNet.loadFromDisk(modelPath());
+    })().catch(error => {
+      faceMatchModelsPromise = null;
+      throw error;
+    });
+  }
+  return faceMatchModelsPromise;
 }
 
 function cleanupSessions() {
@@ -117,7 +128,7 @@ async function detectFace(dataUrl: string) {
   const image = await canvas.loadImage(dataUrlToBuffer(dataUrl));
   const detection = await faceapi.detectAllFaces(
     image,
-    new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.45 })
+    new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.40 })
   );
   return { image, detection };
 }
@@ -156,7 +167,7 @@ export async function verifyLivenessFrames(
     throw new Error('A short camera sequence is required for liveness verification.');
   }
 
-  await ensureModels();
+  await ensureLivenessModels();
 
   const accepted: { index: number; score: number; box: any }[] = [];
   const hashes = new Set<string>();
@@ -170,12 +181,12 @@ export async function verifyLivenessFrames(
     const result = await detectFace(frame);
     if (result.detection.length !== 1) continue;
     const score = result.detection[0].score ?? 0;
-    if (score >= 0.45) {
+    if (score >= 0.40) {
       accepted.push({ index: i, score, box: result.detection[0].box });
     }
   }
 
-  if (accepted.length < 5) {
+  if (accepted.length < 4) {
     throw new Error('We could not keep your face visible throughout the live check. Move slightly closer, improve lighting, and try again.');
   }
 
@@ -185,7 +196,7 @@ export async function verifyLivenessFrames(
   }
   const averageMovement = movement / Math.max(1, accepted.length - 1);
 
-  if (hashes.size < 4 || averageMovement < 0.0035) {
+  if (hashes.size < 3 || averageMovement < 0.0025) {
     throw new Error('Please move your head or hand naturally while showing the requested sign, then try again.');
   }
 
@@ -205,7 +216,7 @@ export async function verifyLivenessFrames(
 }
 
 export async function verifyFaceMatch(sessionId: string, profilePhoto: string) {
-  await ensureModels();
+  await ensureFaceMatchModels();
   const session = getVerificationSession(sessionId);
   if (!session || !session.livenessPassed || !session.livePhoto) {
     throw new Error('Please complete server-side liveness verification first.');
