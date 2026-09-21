@@ -33,7 +33,7 @@ import { db } from './src/db/index.ts';
 import { users as pgUsers } from './src/db/schema.ts';
 import { eq } from 'drizzle-orm';
 import { OAuth2Client } from 'google-auth-library';
-import { createVerificationSession, getVerificationSession, verifyLivenessFrames, verifyFaceMatch as verifyServerFaceMatch, consumeVerifiedProfilePhoto, VerificationChallenge } from './server/verification.js';
+import { createVerificationSession, getVerificationSession, verifyLivenessFrames, verifyFaceMatch as verifyServerFaceMatch, consumeVerifiedProfilePhoto, VerificationChallenge, warmupVerificationModels } from './server/verification.js';
 import {
   syncUserToPostgres,
   syncProfileToPostgres,
