@@ -43,6 +43,9 @@ import {
   syncSettingsToPostgres
 } from './server/postgresSync.js';
 
+// Warm the face models during server startup so the first verification request does not pay the model-load cost.
+void warmupVerificationModels().catch(error => console.error('Verification model warmup failed:', error));
+
 // Ensure seed data is initialized
 if (process.env.SEED_DUMMY_DATA !== 'false') {
   seedBangaloreProfiles();
