@@ -136,7 +136,7 @@ export async function runLocalLiveness(video:HTMLVideoElement,challenge:LocalCha
 }
 
 export async function matchLocalFaces(livePhoto:string,profilePhoto:string):Promise<LocalFaceMatchResult>{
-  await ensureModels();const [liveImage,profileImage]=await Promise.all([loadImage(livePhoto),loadImage(profilePhoto)]);const options=new faceapi.TinyFaceDetectorOptions({inputSize:416,scoreThreshold:.6});
+  await ensureFaceModels();const [liveImage,profileImage]=await Promise.all([loadImage(livePhoto),loadImage(profilePhoto)]);const options=new faceapi.TinyFaceDetectorOptions({inputSize:416,scoreThreshold:.6});
   const [liveFaces,profileFaces]=await Promise.all([faceapi.detectAllFaces(liveImage,options).withFaceLandmarks().withFaceDescriptors(),faceapi.detectAllFaces(profileImage,options).withFaceLandmarks().withFaceDescriptors()]);
   if(liveFaces.length!==1||profileFaces.length!==1)return{passed:false,similarity_percentage:0,confidence:0,feedback:'Each photo must contain exactly one clear face. Please upload a front-facing photo with good lighting.'};
   if(liveFaces[0].detection.score<.65||profileFaces[0].detection.score<.65)return{passed:false,similarity_percentage:0,confidence:0,feedback:'The face is not clear enough to verify. Please use a sharper, well-lit photo.'};
