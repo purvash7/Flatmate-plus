@@ -146,6 +146,7 @@ export const DiscoverPage: React.FC<DiscoverPageProps> = ({ onOpenMatchChat, onO
 
   // Modals
   const [newMatchModal, setNewMatchModal] = useState<MatchItem | null>(null);
+  const [expandedPhoto, setExpandedPhoto] = useState<{ url: string; caption?: string } | null>(null);
 
   // Revisit Skipped Profiles Mode
   const [isReviewMode, setIsReviewMode] = useState(false);
@@ -762,14 +763,24 @@ export const DiscoverPage: React.FC<DiscoverPageProps> = ({ onOpenMatchChat, onO
                         <span className="text-[11px] font-bold text-[#7A7D87] block mb-2">Flat & Room Photos:</span>
                         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
                           {currentProfile.house_details.house_photos.map((hp, idx) => (
-                            <div key={hp.id || idx} className="relative aspect-[4/3] rounded-2xl overflow-hidden border border-[#E6E3DE] bg-white group">
-                              <img src={hp.url} alt={hp.caption || 'House Photo'} className="w-full h-full object-cover hover:scale-105 transition-transform pointer-events-none" />
+                            <button
+                              type="button"
+                              key={hp.id || idx}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setExpandedPhoto({ url: hp.url, caption: hp.caption });
+                              }}
+                              className="relative aspect-[4/3] rounded-2xl overflow-hidden border border-[#E6E3DE] bg-white group cursor-zoom-in focus:outline-none focus:ring-2 focus:ring-[#E07A5F]"
+                              aria-label={`Expand ${hp.caption || 'house photo'}`}
+                            >
+                              <img src={hp.url} alt={hp.caption || 'House Photo'} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
+                              <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors" />
                               {hp.caption && (
-                                <div className="absolute bottom-1.5 left-1.5 right-1.5 bg-black/60 backdrop-blur-xs text-white text-[10px] font-bold px-2 py-0.5 rounded-md truncate">
+                                <div className="absolute bottom-1.5 left-1.5 right-1.5 bg-black/60 backdrop-blur-xs text-white text-[10px] font-bold px-2 py-0.5 rounded-md truncate text-left">
                                   {hp.caption}
                                 </div>
                               )}
-                            </div>
+                            </button>
                           ))}
                         </div>
                       </div>
@@ -885,9 +896,18 @@ export const DiscoverPage: React.FC<DiscoverPageProps> = ({ onOpenMatchChat, onO
                     <h4 className="label-caps text-[#7A7D87] mb-2">Photo Gallery</h4>
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                       {currentProfile.photos.slice(1).map((pic, idx) => (
-                        <div key={idx} className="aspect-square rounded-2xl overflow-hidden border border-[#E6E3DE]">
-                          <img src={pic.url} alt="Gallery" className="w-full h-full object-cover hover:scale-105 transition-transform pointer-events-none" />
-                        </div>
+                        <button
+                          type="button"
+                          key={idx}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setExpandedPhoto({ url: pic.url });
+                          }}
+                          className="aspect-square rounded-2xl overflow-hidden border border-[#E6E3DE] cursor-zoom-in focus:outline-none focus:ring-2 focus:ring-[#E07A5F]"
+                          aria-label="Expand gallery photo"
+                        >
+                          <img src={pic.url} alt="Gallery" className="w-full h-full object-cover hover:scale-105 transition-transform" />
+                        </button>
                       ))}
                     </div>
                   </div>
@@ -969,6 +989,37 @@ export const DiscoverPage: React.FC<DiscoverPageProps> = ({ onOpenMatchChat, onO
                 Profiles undergo photo authenticity, liveness peace-sign checks, and verification to keep Bangalore flatmate finding scam-free and safe.
               </p>
             </div>
+          </div>
+        </div>
+      )}
+
+      {expandedPhoto && (
+        <div
+          className="fixed inset-0 z-[120] bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 sm:p-8"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Expanded flat photo"
+          onClick={() => setExpandedPhoto(null)}
+        >
+          <button
+            type="button"
+            onClick={() => setExpandedPhoto(null)}
+            className="absolute top-4 right-4 sm:top-6 sm:right-6 z-10 w-10 h-10 rounded-full bg-white/95 text-[#2B2D42] flex items-center justify-center shadow-lg hover:bg-white"
+            aria-label="Close expanded photo"
+          >
+            <X className="w-5 h-5" />
+          </button>
+          <div className="relative max-w-6xl max-h-[90vh] w-full h-full flex items-center justify-center" onClick={(event) => event.stopPropagation()}>
+            <img
+              src={expandedPhoto.url}
+              alt={expandedPhoto.caption || 'Expanded flat photo'}
+              className="max-w-full max-h-full object-contain rounded-2xl shadow-2xl"
+            />
+            {expandedPhoto.caption && (
+              <div className="absolute bottom-3 left-1/2 -translate-x-1/2 bg-black/70 text-white text-xs font-bold px-3 py-1.5 rounded-xl max-w-[80%] truncate">
+                {expandedPhoto.caption}
+              </div>
+            )}
           </div>
         </div>
       )}
