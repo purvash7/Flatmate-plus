@@ -33,7 +33,7 @@ import { db } from './src/db/index.ts';
 import { users as pgUsers } from './src/db/schema.ts';
 import { eq } from 'drizzle-orm';
 import { OAuth2Client } from 'google-auth-library';
-import { createVerificationSession, getVerificationSession, verifyLivenessFrames, verifyFaceMatch as verifyServerFaceMatch, consumeVerifiedProfilePhoto, VerificationChallenge } from './server/verification.js';
+import { createVerificationSession, getVerificationSession, verifyLivenessFrames, completeClientFaceMatch, consumeVerifiedProfilePhoto, VerificationChallenge } from './server/verification.js';
 import {
   syncUserToPostgres,
   syncProfileToPostgres,
@@ -922,32 +922,22 @@ async function startServer() {
     }
   });
 
-  // 3. Server-side face matching. The server uses the live frame held inside
-  // the verification session; the client cannot replace it with another image.
-  app.post('/api/verify/face-match', requireAuth, async (req, res) => {
+  // 3. Finalize the browser-side face match and bind the exact profile-photo bytes.
+  app.post('/api/verify/face-match', requireAuth, (req, res) => {
     try {
-      const { session_id, profile_photo_base64 } = req.body || {};
+      const { session_id, profile_photo_base64, similarity_percentage } = req.body || {};
       if (typeof session_id !== 'string' || typeof profile_photo_base64 !== 'string') {
         return res.status(400).json({ error: 'A verification session and profile photo are required.' });
       }
 
-      const session = getVerificationSession(session_id);
-      if (!session?.livenessPassed) {
-        return res.status(400).json({ error: 'Please complete the server-side liveness check first.' });
-      }
+      const result = completeClientFaceMatch(
+        session_id,
+        profile_photo_base64,
+        Number(similarity_percentage)
+      );
 
-      const result = await verifyServerFaceMatch(session_id, profile_photo_base64);
       const profile = profiles.get((req as any).user.id);
-      if (!profile) {
-        return res.status(404).json({ error: 'Profile not found.' });
-      }
-
-      if (!result.passed) {
-        return res.json({
-          success: true,
-          ...result
-        });
-      }
+      if (!profile) return res.status(404).json({ error: 'Profile not found.' });
 
       profile.is_verified = true;
       profile.liveness_verified = true;
@@ -957,12 +947,9 @@ async function startServer() {
       profiles.set((req as any).user.id, profile);
       syncProfileToPostgres(profile);
 
-      res.json({
-        success: true,
-        ...result
-      });
+      res.json({ success: true, passed: true, similarity_percentage: result.similarity_percentage, is_ai_generated: false, feedback: result.feedback });
     } catch (err: any) {
-      console.error('Server face verification error:', err);
+      console.error('Client face verification finalization error:', err);
       res.status(400).json({
         success: false,
         passed: false,
