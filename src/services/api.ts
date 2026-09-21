@@ -44,7 +44,7 @@ export const api={
    const frames=await Promise.all(payload.frames.map(frame=>compressImageDataUrl(frame,640,.72,'image/jpeg')));
    return request('/api/verify/liveness',{method:'POST',body:JSON.stringify({...payload,frames})},true);
  },
- async verifyFaceMatch(payload:{session_id:string;profile_photo_base64:string}):Promise<{success:boolean;passed:boolean;similarity_percentage:number;is_ai_generated:boolean;feedback:string;distance?:number;threshold?:number}>{
+ async verifyFaceMatch(payload:{session_id:string;profile_photo_base64:string;similarity_percentage:number}):Promise<{success:boolean;passed:boolean;similarity_percentage:number;is_ai_generated:boolean;feedback:string}>{
    const profile=await compressImageDataUrl(payload.profile_photo_base64,1280,.82,'image/jpeg');
    return request('/api/verify/face-match',{method:'POST',body:JSON.stringify({...payload,profile_photo_base64:profile})});
  },
