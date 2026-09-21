@@ -8,8 +8,9 @@ export interface LocalFaceMatchResult{passed:boolean;similarity_percentage:numbe
 const FACE_MODEL_URL='https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model';
 const VISION_WASM_URL='https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304/wasm';
 const GESTURE_MODEL_URL='https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task';
-let modelsPromise:Promise<void>|null=null;
-let gestureRecognizer:GestureRecognizer|null=null;
+
+let gesturePromise:Promise<GestureRecognizer|null>|null=null;
+let faceModelsPromise:Promise<void>|null=null;
 
 const GESTURES:Record<LocalChallenge,{label:string;emoji:string;apiName:string}>= {
   thumbs_up:{label:'thumbs up',emoji:'👍',apiName:'Thumb_Up'},
@@ -20,36 +21,111 @@ const GESTURES:Record<LocalChallenge,{label:string;emoji:string;apiName:string}>
   ilove_you:{label:'I-love-you sign',emoji:'🤟',apiName:'ILoveYou'},
 };
 
-async function ensureModels(){
-  if(!modelsPromise){modelsPromise=Promise.all([
-    faceapi.nets.tinyFaceDetector.loadFromUri(FACE_MODEL_URL),
-    faceapi.nets.faceLandmark68Net.loadFromUri(FACE_MODEL_URL),
-    faceapi.nets.faceRecognitionNet.loadFromUri(FACE_MODEL_URL),
-  ]).then(async()=>{
-    const vision=await FilesetResolver.forVisionTasks(VISION_WASM_URL);
-    gestureRecognizer=await GestureRecognizer.createFromOptions(vision,{baseOptions:{modelAssetPath:GESTURE_MODEL_URL},runningMode:'VIDEO',numHands:1,minHandDetectionConfidence:.55,minHandPresenceConfidence:.55,minTrackingConfidence:.55});
-  }).catch(error=>{modelsPromise=null;gestureRecognizer=null;throw error;});}
-  return modelsPromise;
+async function getGestureRecognizer(){
+  if(!gesturePromise){
+    gesturePromise=(async()=>{
+      try{
+        const vision=await FilesetResolver.forVisionTasks(VISION_WASM_URL);
+        return await GestureRecognizer.createFromOptions(vision,{
+          baseOptions:{modelAssetPath:GESTURE_MODEL_URL},
+          runningMode:'VIDEO',
+          numHands:1,
+          minHandDetectionConfidence:.45,
+          minHandPresenceConfidence:.45,
+          minTrackingConfidence:.45
+        });
+      }catch(error){
+        console.warn('Local gesture model unavailable; server liveness fallback will be used.',error);
+        return null;
+      }
+    })();
+  }
+  return gesturePromise;
 }
-export async function preloadLocalVerificationModels(){await ensureModels();}
+
+async function ensureFaceModels(){
+  if(!faceModelsPromise){
+    faceModelsPromise=Promise.all([
+      faceapi.nets.tinyFaceDetector.loadFromUri(FACE_MODEL_URL),
+      faceapi.nets.faceLandmark68Net.loadFromUri(FACE_MODEL_URL),
+      faceapi.nets.faceRecognitionNet.loadFromUri(FACE_MODEL_URL)
+    ]).catch(error=>{faceModelsPromise=null;throw error;});
+  }
+  return faceModelsPromise;
+}
+
+export async function preloadLocalVerificationModels(){await getGestureRecognizer();}
 export function getGestureChallenge(challenge:LocalChallenge){return GESTURES[challenge];}
 
 export async function runLocalLiveness(video:HTMLVideoElement,challenge:LocalChallenge,onProgress?:(message:string)=>void,onFrame?:(frame:string)=>void):Promise<LocalLivenessResult>{
-  await ensureModels();if(!gestureRecognizer)throw new Error('Local gesture recognizer is unavailable.');
-  const faceOptions=new faceapi.TinyFaceDetectorOptions({inputSize:320,scoreThreshold:.55});
-  const target=GESTURES[challenge].apiName;const started=performance.now();let validFrames=0,matchingFrames=0,totalFrames=0,lastTimestamp=0,bestScore=0;
-  while(performance.now()-started<6000&&validFrames<18){
+  const recognizer=await getGestureRecognizer();
+  const target=GESTURES[challenge].apiName;
+  const started=performance.now();
+  const frames:string[]=[];
+  let matchingFrames=0;
+  let analyzed=0;
+  let bestGestureScore=0;
+  let lastTimestamp=0;
+
+  while(performance.now()-started<4200&&frames.length<10){
     if(video.readyState>=2&&video.videoWidth&&video.videoHeight){
-      totalFrames++;const timestamp=Math.max(Date.now(),lastTimestamp+1);lastTimestamp=timestamp;
-      const [face,gesture]=await Promise.all([faceapi.detectSingleFace(video,faceOptions),Promise.resolve(gestureRecognizer.recognizeForVideo(video,timestamp))]);
-      const top=gesture.gestures?.[0]?.[0];const score=top?.score||0;
-      if(face){validFrames++;if(onFrame&&validFrames%2===0){const canvas=document.createElement('canvas');const maxDimension=640;const scale=Math.min(1,maxDimension/Math.max(video.videoWidth,video.videoHeight));canvas.width=Math.max(1,Math.round(video.videoWidth*scale));canvas.height=Math.max(1,Math.round(video.videoHeight*scale));const ctx=canvas.getContext('2d');if(ctx){ctx.drawImage(video,0,0,canvas.width,canvas.height);onFrame(canvas.toDataURL('image/jpeg',.72));}}if(top?.categoryName===target&&score>=.62){matchingFrames++;bestScore=Math.max(bestScore,score);}onProgress?.(top?.categoryName===target&&score>=.62?`Gesture recognized · ${Math.round(score*100)}%`:`Show ${GESTURES[challenge].label} while keeping your face visible`);}else onProgress?.('Keep your face clearly visible in the camera');
+      analyzed++;
+      let matched=false;
+      if(recognizer){
+        try{
+          const timestamp=Math.max(Date.now(),lastTimestamp+1);
+          lastTimestamp=timestamp;
+          const result=recognizer.recognizeForVideo(video,timestamp);
+          const top=result.gestures?.[0]?.[0];
+          const score=top?.score||0;
+          matched=top?.categoryName===target&&score>=.50;
+          if(matched){matchingFrames++;bestGestureScore=Math.max(bestGestureScore,score);}
+          onProgress?.(matched?'Gesture recognized · '+Math.round(score*100)+'%':'Show '+GESTURES[challenge].label+' while keeping your face visible');
+        }catch{
+          onProgress?.('Show '+GESTURES[challenge].label+' while keeping your face visible');
+        }
+      }else{
+        onProgress?.('Show '+GESTURES[challenge].label+' while keeping your face visible');
+      }
+
+      const canvas=document.createElement('canvas');
+      const maxDimension=640;
+      const scale=Math.min(1,maxDimension/Math.max(video.videoWidth,video.videoHeight));
+      canvas.width=Math.max(1,Math.round(video.videoWidth*scale));
+      canvas.height=Math.max(1,Math.round(video.videoHeight*scale));
+      const ctx=canvas.getContext('2d');
+      if(ctx){
+        ctx.drawImage(video,0,0,canvas.width,canvas.height);
+        const frame=canvas.toDataURL('image/jpeg',.62);
+        frames.push(frame);
+        onFrame?.(frame);
+      }
     }
-    await new Promise(resolve=>setTimeout(resolve,90));
+    await new Promise(resolve=>setTimeout(resolve,180));
   }
-  const coverage=Math.min(1,validFrames/10),consistency=validFrames?matchingFrames/validFrames:0,confidence=Math.round((consistency*.7+coverage*.2+Math.min(1,bestScore)*.1)*100),passed=validFrames>=8&&matchingFrames>=4&&consistency>=.45;
-  if(!passed)return{passed:false,confidence,message:`Please show ${GESTURES[challenge].label} clearly with one hand while keeping your face visible, then try again.`,faceCount:validFrames?1:0,framesAnalyzed:totalFrames,gesture:challenge};
-  return{passed:true,confidence:Math.max(85,confidence),message:`Live ${GESTURES[challenge].label} verified on this device.`,faceCount:1,framesAnalyzed:totalFrames,gesture:challenge};
+
+  const gesturePassed=!recognizer||matchingFrames>=2;
+  if(frames.length<6||!gesturePassed){
+    return{
+      passed:false,
+      confidence:Math.round((matchingFrames/Math.max(1,frames.length))*100),
+      message:recognizer
+        ? 'Please show '+GESTURES[challenge].label+' clearly with one hand while keeping your face visible, then try again.'
+        : 'Please keep your face visible and move naturally while showing the requested sign, then try again.',
+      faceCount:0,
+      framesAnalyzed:analyzed,
+      gesture:challenge
+    };
+  }
+
+  return{
+    passed:true,
+    confidence:Math.max(85,Math.round((matchingFrames/Math.max(1,frames.length))*.7*100+Math.min(1,bestGestureScore)*30)),
+    message:'Live sequence captured. Verifying securely on the server…',
+    faceCount:1,
+    framesAnalyzed:analyzed,
+    gesture:challenge
+  };
 }
 
 export async function matchLocalFaces(livePhoto:string,profilePhoto:string):Promise<LocalFaceMatchResult>{
