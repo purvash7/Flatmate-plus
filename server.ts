@@ -30,6 +30,7 @@ import {
 import { calculateMatchScore } from './server/scoring.js';
 import { UserProfile, MatchItem, MessageItem, DiscoverFilters } from './src/types.js';
 import { db } from './src/db/index.ts';
+import { initializePostgresPersistence } from './server/postgresPersistence.ts';
 import { users as pgUsers } from './src/db/schema.ts';
 import { eq } from 'drizzle-orm';
 import { OAuth2Client } from 'google-auth-library';
@@ -2010,11 +2011,18 @@ async function createServer() {
   return server;
 }
 
-// Vercel detects the exported handler/server and manages the HTTP lifecycle.
-// Locally, `npm run dev` still starts the same Express server through server-entry.ts.
-export const serverPromise = createServer();
+// Initialize PostgreSQL before the server begins accepting requests.
+// Vercel can reuse the initialized server between invocations.
+await initializePostgresPersistence();
 
-export default async function handler(req: any, res: any) {
-  const server = await serverPromise;
-  return server.emit('request', req, res);
+const server = await createServer();
+
+// Vercel manages the HTTP lifecycle for the exported Node server.
+// Local development keeps the traditional listening server behavior.
+if (!process.env.VERCEL) {
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log(`FlatMate+ server running on http://0.0.0.0:${PORT}`);
+  });
 }
+
+export default server;
