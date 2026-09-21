@@ -2012,17 +2012,12 @@ async function createServer() {
 }
 
 // Initialize PostgreSQL before the server begins accepting requests.
-// Vercel can reuse the initialized server between invocations.
 await initializePostgresPersistence();
 
 const server = await createServer();
 
-// Vercel manages the HTTP lifecycle for the exported Node server.
-// Local development keeps the traditional listening server behavior.
-if (!process.env.VERCEL) {
-  server.listen(PORT, '0.0.0.0', () => {
-    console.log(`FlatMate+ server running on http://0.0.0.0:${PORT}`);
-  });
-}
-
-export default server;
+// Vercel's zero-config Node server deployment starts root server.ts
+// as a long-running Node process and expects the server to listen on PORT.
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`FlatMate+ server running on http://0.0.0.0:${PORT}`);
+});
